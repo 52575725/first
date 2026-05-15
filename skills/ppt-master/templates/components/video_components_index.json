@@ -1,0 +1,382 @@
+{
+  "meta": {
+    "name": "PPT Master video component library",
+    "version": "2026-05-13",
+    "default_viewbox": "1920 1080",
+    "purpose": "Reusable component choices for PPT-to-video recomposition and LLM layout selection.",
+    "selection_rule": "Pick the component whose content_shape matches the slide/paragraph structure. Prefer image components only when the visual adds evidence or emotional context."
+  },
+  "categories": {
+    "narrative": {
+      "label": "Narrative",
+      "components": [
+        "preserve_slide",
+        "cover_hero",
+        "section_title",
+        "statement_focus",
+        "quote_focus"
+      ]
+    },
+    "content": {
+      "label": "Content Explanation",
+      "components": [
+        "insight_cards",
+        "problem_stack",
+        "solution_flow",
+        "capability_matrix",
+        "before_after",
+        "dense_grid",
+        "split_text_visual"
+      ]
+    },
+    "process": {
+      "label": "Process and Roadmap",
+      "components": [
+        "process_flow",
+        "timeline",
+        "roadmap_timeline",
+        "lifecycle_loop",
+        "flywheel"
+      ]
+    },
+    "data": {
+      "label": "Data and Business",
+      "components": [
+        "metric_dashboard",
+        "kpi_cards",
+        "chart_focus",
+        "market_dashboard",
+        "revenue_model",
+        "financial_snapshot"
+      ]
+    },
+    "visual": {
+      "label": "Visual Evidence",
+      "components": [
+        "image_hero",
+        "image_pan_zoom",
+        "photo_story",
+        "image_mosaic",
+        "product_showcase",
+        "map_focus"
+      ]
+    },
+    "people": {
+      "label": "People and Organization",
+      "components": [
+        "team_roster",
+        "role_grid",
+        "org_chart"
+      ]
+    }
+  },
+  "components": {
+    "preserve_slide": {
+      "name": "Preserve original slide",
+      "content_shape": ["visually complete slides", "dense imported PPT", "slides with strong existing composition"],
+      "best_for": ["finished PPT pages", "OCR-derived source decks", "slides where recomposition may lose visual meaning"],
+      "visual_treatment": "keep original slide as base, add subtle spotlight or callout only",
+      "video_treatment": "stable hold with small emphasis animation",
+      "needs_image": false
+    },
+    "cover_hero": {
+      "name": "Editorial cover hero",
+      "content_shape": ["cover", "opening statement", "brand or project title"],
+      "best_for": ["low-density title slides", "project introductions", "vision statements"],
+      "visual_treatment": "large title, one strong visual or emblem, restrained accent line",
+      "video_treatment": "slow entrance, no card frame",
+      "needs_image": "optional"
+    },
+    "section_title": {
+      "name": "Section title",
+      "content_shape": ["chapter divider", "transition slide", "single idea"],
+      "best_for": ["low text density", "agenda transitions"],
+      "visual_treatment": "big title, short subtitle, clear whitespace",
+      "video_treatment": "fade in title and underline",
+      "needs_image": false
+    },
+    "statement_focus": {
+      "name": "Statement focus",
+      "content_shape": ["one core claim", "executive summary", "single takeaway"],
+      "best_for": ["insight headline with one support sentence"],
+      "visual_treatment": "one oversized statement with compact evidence strip",
+      "video_treatment": "claim first, support appears second",
+      "needs_image": false
+    },
+    "quote_focus": {
+      "name": "Quote or voiceover focus",
+      "content_shape": ["quote", "testimonial", "mission sentence"],
+      "best_for": ["speaker-driven paragraphs", "customer voice", "founder message"],
+      "visual_treatment": "large quote block, source line, minimal background",
+      "video_treatment": "type-on or fade by phrase",
+      "needs_image": "optional"
+    },
+    "insight_cards": {
+      "name": "Modern insight cards",
+      "content_shape": ["3-5 parallel points", "feature list", "benefit list"],
+      "best_for": ["clean bullet groups", "three-card summaries", "advantage pages"],
+      "visual_treatment": "flat white cards, color-coded accent bars, no debug-like borders",
+      "video_treatment": "card-by-card reveal",
+      "needs_image": false
+    },
+    "problem_stack": {
+      "name": "Problem stack",
+      "content_shape": ["pain points", "risks", "barriers", "challenge decomposition"],
+      "best_for": ["problem pages", "market friction", "operational bottlenecks"],
+      "visual_treatment": "2x2 or vertical stack with severity colors and concise evidence",
+      "video_treatment": "problems appear in order of narration",
+      "needs_image": false
+    },
+    "solution_flow": {
+      "name": "Solution flow",
+      "content_shape": ["solution steps", "workflow", "closed-loop chain"],
+      "best_for": ["3-7 connected stages", "from source to outcome"],
+      "template": "process_flow.svg",
+      "visual_treatment": "horizontal path with numbered nodes and final outcome",
+      "video_treatment": "advance along the path",
+      "needs_image": false
+    },
+    "capability_matrix": {
+      "name": "Capability matrix",
+      "content_shape": ["advantages", "capabilities", "moats", "multi-dimensional comparison"],
+      "best_for": ["technology plus model advantages", "why us pages"],
+      "template": "feature_matrix_table.svg",
+      "visual_treatment": "2x2 matrix or compact grid with four capability blocks",
+      "video_treatment": "highlight each capability quadrant",
+      "needs_image": false
+    },
+    "before_after": {
+      "name": "Before / after contrast",
+      "content_shape": ["current state vs target state", "old vs new", "before after"],
+      "best_for": ["transformation story", "problem-solution contrast"],
+      "template": "comparison_columns.svg",
+      "visual_treatment": "two balanced columns with a clear transition arrow",
+      "video_treatment": "left side first, then right side",
+      "needs_image": "optional"
+    },
+    "dense_grid": {
+      "name": "Dense but organized grid",
+      "content_shape": ["many short items", "taxonomy", "checklist"],
+      "best_for": ["6-10 compact facts that should be scanned"],
+      "template": "icon_grid.svg",
+      "visual_treatment": "tight grid, small icons, consistent spacing",
+      "video_treatment": "row-by-row reveal",
+      "needs_image": false
+    },
+    "split_text_visual": {
+      "name": "Split text and visual",
+      "content_shape": ["one paragraph plus a concrete subject", "explanation with evidence image"],
+      "best_for": ["industry scenes", "product/service explanation", "case example"],
+      "visual_treatment": "text block on one side, image on the other with stable crop",
+      "video_treatment": "image hold with text callouts",
+      "needs_image": true
+    },
+    "process_flow": {
+      "name": "Process flow",
+      "content_shape": ["steps", "pipeline", "methodology"],
+      "best_for": ["3-8 sequential steps"],
+      "template": "process_flow.svg",
+      "visual_treatment": "connected numbered nodes",
+      "video_treatment": "progressive path reveal",
+      "needs_image": false
+    },
+    "timeline": {
+      "name": "Timeline",
+      "content_shape": ["milestones", "dates", "phases"],
+      "best_for": ["roadmaps with exact years or stages"],
+      "template": "timeline.svg",
+      "visual_treatment": "horizontal milestone line",
+      "video_treatment": "marker-by-marker reveal",
+      "needs_image": false
+    },
+    "roadmap_timeline": {
+      "name": "Roadmap timeline",
+      "content_shape": ["growth plan", "phase plan", "year 1 to year 5"],
+      "best_for": ["business plan roadmaps", "expansion plans"],
+      "template": "roadmap_vertical.svg",
+      "visual_treatment": "phase cards on a clear progression axis",
+      "video_treatment": "phase-by-phase progression",
+      "needs_image": false
+    },
+    "lifecycle_loop": {
+      "name": "Lifecycle loop",
+      "content_shape": ["closed loop", "cycle", "reuse", "regeneration"],
+      "best_for": ["circular economy", "feedback loops", "recycling loops"],
+      "template": "cycle_diagram.svg",
+      "visual_treatment": "circular stages around a central outcome",
+      "video_treatment": "clockwise stage reveal",
+      "needs_image": false
+    },
+    "flywheel": {
+      "name": "Flywheel",
+      "content_shape": ["self-reinforcing loop", "growth engine"],
+      "best_for": ["network effects", "business flywheel", "participation loops"],
+      "template": "flywheel_diagram.svg",
+      "visual_treatment": "loop with momentum arrows",
+      "video_treatment": "rotational emphasis by segment",
+      "needs_image": false
+    },
+    "metric_dashboard": {
+      "name": "Metric dashboard",
+      "content_shape": ["4-8 standalone metrics", "market stats", "overview numbers"],
+      "best_for": ["market potential", "performance summary"],
+      "template": "kpi_cards.svg",
+      "visual_treatment": "2x2 or 1x4 metric cards with short labels",
+      "video_treatment": "number emphasis and short pause",
+      "needs_image": false
+    },
+    "kpi_cards": {
+      "name": "KPI cards",
+      "content_shape": ["numeric highlights", "financial metrics"],
+      "best_for": ["few high-value numbers"],
+      "template": "kpi_cards.svg",
+      "visual_treatment": "large numeric value plus small context line",
+      "video_treatment": "count-up or pop-in",
+      "needs_image": false
+    },
+    "chart_focus": {
+      "name": "Chart focus",
+      "content_shape": ["chart explanation", "trend", "comparison data"],
+      "best_for": ["existing chart slides", "data-heavy pages"],
+      "template": "bar_chart.svg",
+      "visual_treatment": "one chart with annotated conclusion",
+      "video_treatment": "focus on the key series then conclusion",
+      "needs_image": false
+    },
+    "market_dashboard": {
+      "name": "Market dashboard",
+      "content_shape": ["market size", "policy drivers", "consumer demand", "partners"],
+      "best_for": ["market opportunity pages"],
+      "template": "kpi_cards.svg",
+      "visual_treatment": "four market signals with one hero number if available",
+      "video_treatment": "signal-by-signal reveal",
+      "needs_image": false
+    },
+    "revenue_model": {
+      "name": "Revenue model",
+      "content_shape": ["revenue sources", "profit model", "financial estimate"],
+      "best_for": ["business model pages", "monetization pages"],
+      "template": "financial_statement_table.svg",
+      "visual_treatment": "left-side hero estimate plus right-side revenue streams",
+      "video_treatment": "estimate first, sources second",
+      "needs_image": false
+    },
+    "financial_snapshot": {
+      "name": "Financial snapshot",
+      "content_shape": ["cost", "revenue", "profit", "margin"],
+      "best_for": ["financial plan summary"],
+      "template": "waterfall_chart.svg",
+      "visual_treatment": "compact financial blocks or bridge",
+      "video_treatment": "step-by-step financial bridge",
+      "needs_image": false
+    },
+    "image_hero": {
+      "name": "Image hero",
+      "content_shape": ["concrete place", "product", "scene", "real-world object"],
+      "best_for": ["emotion or evidence-led slides"],
+      "visual_treatment": "large high-resolution image with title overlay or adjacent title",
+      "video_treatment": "slow pan/zoom with restrained text",
+      "needs_image": true
+    },
+    "image_pan_zoom": {
+      "name": "Image pan and zoom",
+      "content_shape": ["single strong photo", "visual evidence"],
+      "best_for": ["scene explanation", "environmental evidence", "product photo"],
+      "visual_treatment": "stable crop, no stretched image",
+      "video_treatment": "slow pan with callout text",
+      "needs_image": true
+    },
+    "photo_story": {
+      "name": "Photo story",
+      "content_shape": ["narrative sequence", "case story", "field process"],
+      "best_for": ["3-5 images in a sequence"],
+      "visual_treatment": "image strip or magazine-style sequence",
+      "video_treatment": "image-by-image progression",
+      "needs_image": true
+    },
+    "image_mosaic": {
+      "name": "Image mosaic",
+      "content_shape": ["multiple examples", "portfolio", "before/after evidence"],
+      "best_for": ["sets of photos with short captions"],
+      "visual_treatment": "asymmetric mosaic with consistent gutters",
+      "video_treatment": "mosaic builds from primary to secondary images",
+      "needs_image": true
+    },
+    "product_showcase": {
+      "name": "Product showcase",
+      "content_shape": ["product", "material", "device", "physical output"],
+      "best_for": ["product or material pages"],
+      "visual_treatment": "large product image, short feature bullets",
+      "video_treatment": "feature callouts over product area",
+      "needs_image": true
+    },
+    "map_focus": {
+      "name": "Map focus",
+      "content_shape": ["geography", "city expansion", "regional coverage"],
+      "best_for": ["regional layout", "national rollout"],
+      "template": "journey_map.svg",
+      "visual_treatment": "map or route-style visual with highlighted regions",
+      "video_treatment": "region-by-region reveal",
+      "needs_image": "optional"
+    },
+    "team_roster": {
+      "name": "Team roster",
+      "content_shape": ["team members", "roles", "bios"],
+      "best_for": ["3-6 people with titles and short bios"],
+      "template": "team_roster.svg",
+      "visual_treatment": "role cards with clear hierarchy",
+      "video_treatment": "role-by-role reveal",
+      "needs_image": "optional"
+    },
+    "role_grid": {
+      "name": "Role grid",
+      "content_shape": ["functions", "departments", "responsibilities"],
+      "best_for": ["operating team or functional map"],
+      "visual_treatment": "grid of roles, responsibilities, and ownership",
+      "video_treatment": "group-by-group reveal",
+      "needs_image": false
+    },
+    "org_chart": {
+      "name": "Organization chart",
+      "content_shape": ["hierarchy", "reporting lines", "organization"],
+      "best_for": ["multi-level teams"],
+      "template": "org_chart.svg",
+      "visual_treatment": "hierarchical nodes with reporting lines",
+      "video_treatment": "top-down reveal",
+      "needs_image": false
+    },
+    "callout_overlay": {
+      "name": "Callout overlay",
+      "content_shape": ["existing slide with one key phrase", "highlight region"],
+      "best_for": ["preserved slide emphasis"],
+      "visual_treatment": "soft highlight or spotlight, no hard debug boxes",
+      "video_treatment": "highlight follows narration",
+      "needs_image": false
+    },
+    "bullet_reveal": {
+      "name": "Bullet reveal",
+      "content_shape": ["short ordered bullets", "talking points"],
+      "best_for": ["sequential explanation with 3-7 bullets"],
+      "visual_treatment": "large readable bullet rows with clear active state",
+      "video_treatment": "one bullet active at a time",
+      "needs_image": false
+    },
+    "three_card_summary": {
+      "name": "Three-card summary",
+      "content_shape": ["three parallel points"],
+      "best_for": ["legacy compatibility for 3-card pages"],
+      "visual_treatment": "modern cards with accent only, no heavy border",
+      "video_treatment": "card-by-card emphasis",
+      "needs_image": false
+    },
+    "two_column_compare": {
+      "name": "Two-column comparison",
+      "content_shape": ["A vs B", "before vs after", "pros vs cons"],
+      "best_for": ["two-sided contrast"],
+      "template": "comparison_columns.svg",
+      "visual_treatment": "balanced columns and explicit contrast labels",
+      "video_treatment": "left-right contrast sweep",
+      "needs_image": "optional"
+    }
+  }
+}

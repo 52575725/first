@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import os
+import shutil
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -38,6 +40,79 @@ SOURCE_ASSET_RE = re.compile(
     re.IGNORECASE,
 )
 COURSE_SECTION_PREFIX_RE = re.compile(r"^\s*(?:[一二三四五六七八九十]+[、.．]\s*|\d+(?:\.\d+)?\s+)(.+)$")
+
+
+def ensure_media_tools_on_path():
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if ffmpeg and ffprobe:
+        try:
+            probe = subprocess.run(
+                [ffmpeg, "-hide_banner", "-h", "filter=drawtext"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            probe = None
+        if probe and probe.returncode == 0:
+            output = f"{probe.stdout}\n{probe.stderr}".lower()
+            if "unknown filter" not in output:
+                return
+
+    def candidate_dirs():
+        repo_root = Path(__file__).resolve().parents[3]
+        roots = [
+            Path("D:/tools/ffmpeg/ffmpeg-8.1.1-essentials_build/bin"),
+            Path("D:/tools/ffmpeg"),
+            repo_root / "tools" / "ffmpeg" / "bin",
+            repo_root / "tools" / "ffmpeg",
+            Path("C:/tools/ffmpeg"),
+        ]
+        local_appdata = Path.home() / "AppData" / "Local"
+        roots.extend(local_appdata.glob("WeMod/app-*/resources/app.asar.unpacked/static/unpacked/capture/release/bin/64bit"))
+        roots.extend(Path("C:/Program Files (x86)/Lenovo/LegionZone").glob("*/SEGamingAI/services/editor"))
+        if Path("D:/tools/ffmpeg").exists():
+            roots.extend(Path("D:/tools/ffmpeg").glob("*/bin"))
+        return roots
+
+    def is_working_media_dir(path):
+        try:
+            ffmpeg_path = path / "ffmpeg.exe"
+            ffprobe_path = path / "ffprobe.exe"
+            if not ffmpeg_path.exists() or not ffprobe_path.exists():
+                return False
+            probe = subprocess.run(
+                [str(ffmpeg_path), "-hide_banner", "-h", "filter=drawtext"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        output = f"{probe.stdout}\n{probe.stderr}".lower()
+        return probe.returncode == 0 and "unknown filter" not in output
+
+    existing = []
+    for path in candidate_dirs():
+        try:
+            if path.exists() and is_working_media_dir(path):
+                path_text = str(path)
+                if path_text not in existing:
+                    existing.append(path_text)
+        except OSError:
+            continue
+    if existing:
+        current_path = os.environ.get("PATH", "")
+        parts = existing + ([current_path] if current_path else [])
+        os.environ["PATH"] = os.pathsep.join(parts)
+
+
+ensure_media_tools_on_path()
 
 
 def now_iso() -> str:
@@ -122,6 +197,9 @@ def is_source_asset_reference(text: str) -> bool:
     text = str(text or "").strip()
     if not text:
         return False
+    quoted = re.sub(r"^>\s*", "", text).strip()
+    if re.fullmatch(r"\[image\]\s*image\s*\d+", quoted, re.IGNORECASE):
+        return True
     if text.startswith("![") and "](" in text:
         return True
     return bool(SOURCE_ASSET_RE.search(text))

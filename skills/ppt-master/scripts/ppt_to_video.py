@@ -24,6 +24,80 @@ MIN_SEGMENT_BYTES = 32 * 1024
 RENDER_CONTEXT = threading.local()
 
 
+def ensure_media_tools_on_path():
+    """Make a working ffmpeg/ffprobe pair discoverable after moving the repo."""
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if ffmpeg and ffprobe:
+        try:
+            probe = subprocess.run(
+                [ffmpeg, "-hide_banner", "-h", "filter=drawtext"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            probe = None
+        if probe and probe.returncode == 0:
+            output = f"{probe.stdout}\n{probe.stderr}".lower()
+            if "unknown filter" not in output:
+                return
+
+    def candidate_dirs():
+        repo_root = Path(__file__).resolve().parents[3]
+        roots = [
+            Path("D:/tools/ffmpeg/ffmpeg-8.1.1-essentials_build/bin"),
+            Path("D:/tools/ffmpeg"),
+            repo_root / "tools" / "ffmpeg" / "bin",
+            repo_root / "tools" / "ffmpeg",
+            Path("C:/tools/ffmpeg"),
+        ]
+        local_appdata = Path.home() / "AppData" / "Local"
+        roots.extend(local_appdata.glob("WeMod/app-*/resources/app.asar.unpacked/static/unpacked/capture/release/bin/64bit"))
+        roots.extend(Path("C:/Program Files (x86)/Lenovo/LegionZone").glob("*/SEGamingAI/services/editor"))
+        if Path("D:/tools/ffmpeg").exists():
+            roots.extend(Path("D:/tools/ffmpeg").glob("*/bin"))
+        return roots
+
+    def is_working_media_dir(path):
+        try:
+            ffmpeg_path = path / "ffmpeg.exe"
+            ffprobe_path = path / "ffprobe.exe"
+            if not ffmpeg_path.exists() or not ffprobe_path.exists():
+                return False
+            probe = subprocess.run(
+                [str(ffmpeg_path), "-hide_banner", "-h", "filter=drawtext"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        output = f"{probe.stdout}\n{probe.stderr}".lower()
+        return probe.returncode == 0 and "unknown filter" not in output
+
+    existing = []
+    for path in candidate_dirs():
+        try:
+            if path.exists() and is_working_media_dir(path):
+                path_text = str(path)
+                if path_text not in existing:
+                    existing.append(path_text)
+        except OSError:
+            continue
+    if existing:
+        current_path = os.environ.get("PATH", "")
+        parts = existing + ([current_path] if current_path else [])
+        os.environ["PATH"] = os.pathsep.join(parts)
+
+
+ensure_media_tools_on_path()
+
+
 class VideoConfig:
     """视频配置"""
     def __init__(self):
@@ -461,6 +535,8 @@ def source_slide_lines(project, slide_num):
             if not text:
                 continue
             text = re.sub(r"^[-*+]\s+", "", text).strip()
+            if is_noise_line(text):
+                continue
             if text:
                 collected.append(text)
 
@@ -603,7 +679,9 @@ def normalize_video_text(text):
 def is_no_content_placeholder(text):
     cleaned = normalize_video_text(text).strip("_ ").lower()
     cleaned = cleaned.rstrip(".")
-    return "no extractable text content" in cleaned
+    if "no extractable text content" in cleaned:
+        return True
+    return bool(re.fullmatch(r"(?:>\s*)?\[image\]\s*image\s*\d+", cleaned))
 
 
 def visual_text_len(text):
@@ -614,7 +692,9 @@ def visual_text_len(text):
     return total
 
 
-MATH_FONT = "/Windows/Fonts/times.ttf"
+MATH_FONT = "'C\\:/Windows/Fonts/times.ttf'"
+CHINESE_FONT = "'C\\:/Windows/Fonts/msyh.ttc'"
+CHINESE_FONT_BOLD = "'C\\:/Windows/Fonts/msyhbd.ttc'"
 MATH_TEXT_RE = re.compile(r"[A-Za-z0-9√±×÷=<>≤≥≠²³πμ→+\-*/^().（）\[\]\s,，、;；:：|]+")
 MATH_SIGNAL_RE = re.compile(r"[A-Za-z√±×÷=<>≤≥≠²³πμ→^]")
 STRONG_MATH_SIGNAL_RE = re.compile(r"(√|±|×|÷|≤|≥|≠|²|³|→|\^|=|[A-Za-z0-9]\s*[+\-*/<>]\s*[A-Za-z0-9√])")
@@ -1723,7 +1803,7 @@ def add_filter_segment(filters, current, layer_num, x1, y1, x2, y2, color, thick
     text = " " * max(1, int(length / 6))
     text_esc = escape_text(text)
     filters.append(
-        f"[{current}]drawtext=text='{text_esc}':fontfile=/Windows/Fonts/msyhbd.ttc:"
+        f"[{current}]drawtext=text='{text_esc}':fontfile={CHINESE_FONT_BOLD}:"
         f"fontsize={int(thickness)}:fontcolor={color}:expansion=none:"
         f"x={int(x1)}:y={int(y1 - thickness / 2)}:box=1:boxcolor={color}:boxborderw=0:"
         f"rotate={angle:.5f}{_enable_after(start)}[v{layer_num}]"
@@ -1882,7 +1962,7 @@ def add_filter_drawtext(
             bold=bold,
             start=start,
         )
-    fontfile = "/Windows/Fonts/msyhbd.ttc" if bold else "/Windows/Fonts/msyh.ttc"
+    fontfile = CHINESE_FONT_BOLD if bold else CHINESE_FONT
     text_esc = escape_text(text)
     filters.append(
         f"[{current}]drawtext=text='{text_esc}':fontfile={fontfile}:"
@@ -2018,7 +2098,7 @@ def add_filter_rich_text(
         if math_like:
             fontfile = MATH_FONT
         else:
-            fontfile = "/Windows/Fonts/msyhbd.ttc" if bold else "/Windows/Fonts/msyh.ttc"
+            fontfile = CHINESE_FONT_BOLD if bold else CHINESE_FONT
         text_esc = escape_text(segment)
         filters.append(
             f"[{current}]drawtext=text='{text_esc}':fontfile={fontfile}:"
@@ -5527,6 +5607,8 @@ def micro_course_topic_kind(title, rest, cards, project=None, slide_num=0):
         return "concept"
     if any(keyword in combined for keyword in ("性质", "分类", "概念", "进阶知识", "无理数")):
         return "formula"
+    if any(keyword in combined for keyword in ("增大有益摩擦", "减小有害摩擦", "鞋底花纹", "轮胎花纹", "润滑油", "轴承", "刹车", "抓地力", "防滑")):
+        return "case"
     if any(keyword in combined for keyword in ("情境", "应用", "观察", "探究", "生活", "案例", "场景", "几何", "物理", "金融")):
         return "case"
     if real_example and any(keyword in combined for keyword in ("计算", "求解", "化简", "方程", "不等式")):
@@ -5651,6 +5733,43 @@ def micro_course_specific_points(title, rest, limit=4):
             "金融：由增长倍数反推平均变化率",
             "关键：先识别哪个量被平方了",
         ]
+    elif "分类及特点" in combined or (
+        "静摩擦力" in combined and "滑动摩擦力" in combined and "滚动摩擦力" in combined
+    ):
+        points = [
+            "静摩擦：物体没相对滑动，但有相对运动趋势，方向与趋势相反。",
+            "滑动摩擦：已经发生相对滑动，如推箱子时箱子和地面互相阻碍。",
+            "滚动摩擦：轮胎或滚轮滚动时产生，通常比滑动摩擦小。",
+            "判断顺序：先看是否滑动，再看是否滚动，最后判断受力方向。",
+        ]
+    elif "摩擦力的计算与应用" in combined:
+        points = [
+            "先分清类型：滑动摩擦可用 F = μN，静摩擦不能直接套等号。",
+            "μ 表示接触面的粗糙程度，材料和表面状态变了，μ 才会变。",
+            "N 是垂直接触面的正压力，水平面无额外竖直力时常等于重力。",
+            "应用时一次只改一个因素，才能判断摩擦力为什么变大或变小。",
+        ]
+    elif "影响因素分析" in combined:
+        points = [
+            "适用条件：比较摩擦大小时，尽量只改变一个变量，其他条件保持相同。",
+            "粗糙程度看 μ：砂纸比玻璃更粗糙，μ 更大，阻碍作用通常更强。",
+            "正压力看 N：压得越紧，接触面微小凸起咬合越明显。",
+            "判断方法：先说清楚 μ 变了还是 N 变了，再解释摩擦力变化。",
+        ]
+    elif any(keyword in combined for keyword in ("增大有益摩擦", "鞋底花纹", "轮胎花纹", "抓地力", "防滑")):
+        points = [
+            "鞋底花纹：凹凸纹路让接触面更粗糙，增加微小凸起之间的咬合。",
+            "轮胎沟槽：排走积水，让橡胶更稳定地贴住路面，保持抓地力。",
+            "本质关系：在正压力相近时，接触面越粗糙，有益摩擦通常越大。",
+            "应用价值：行走、跑步和刹车都依赖这种防滑能力。",
+        ]
+    elif any(keyword in combined for keyword in ("减小有害摩擦", "润滑油", "滚动代替滑动", "轴承")):
+        points = [
+            "润滑油：在接触面之间形成油膜，减少固体表面的直接刮擦。",
+            "滚动代替滑动：滚珠或滚轮让接触方式改变，阻力明显变小。",
+            "本质目标：减少能量损耗和零件磨损，而不是让摩擦完全消失。",
+            "应用场景：发动机、轴承、传动部件都需要控制有害摩擦。",
+        ]
     elif "函数" in combined:
         points = [
             "定义域：根号内表达式 ≥ 0",
@@ -5729,6 +5848,18 @@ def micro_course_specific_lead(title, rest):
         return "化简根式就是把根号里能开尽方的部分提出来，让结果更短、更标准。"
     if "应用场景" in combined:
         return "应用题里出现根号，通常是因为题目已知平方关系，需要反求原来的量。"
+    if "分类及特点" in combined or (
+        "静摩擦力" in combined and "滑动摩擦力" in combined and "滚动摩擦力" in combined
+    ):
+        return "这一页要把三种摩擦分开看：静摩擦看趋势，滑动摩擦看实际滑动，滚动摩擦看轮胎和滚轮。"
+    if "摩擦力的计算与应用" in combined:
+        return "这一章要把计算和应用连起来：先确认摩擦类型，再读懂 μ 和 N，最后用生活例子检验。"
+    if "影响因素分析" in combined:
+        return "影响因素页不要只记公式，要把条件说清楚：到底是接触面粗糙程度变了，还是正压力变了。"
+    if any(keyword in combined for keyword in ("增大有益摩擦", "鞋底花纹", "轮胎花纹", "抓地力", "防滑")):
+        return "这一页重点解释：为什么鞋底和轮胎要做花纹，以及这些花纹怎样把摩擦变成安全优势。"
+    if any(keyword in combined for keyword in ("减小有害摩擦", "润滑油", "滚动代替滑动", "轴承")):
+        return "这一页重点看减小摩擦的两条路：隔开粗糙接触面，或者把滑动接触改成滚动接触。"
     if "不等式" in combined:
         return "根号不等式要先写定义域，再判断两边能否平方，最后把解集和定义域取交集。"
     if "函数" in combined:
@@ -5742,6 +5873,10 @@ def micro_course_formula_lead_text(ctx):
     lead = normalize_video_text(ctx.get("lead", ""))
     title = normalize_video_text(ctx.get("title", ""))
     combined = " ".join([title, lead, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if "影响因素分析" in combined:
+        return "先看清控制变量：接触面粗糙程度影响 μ，正压力大小影响 N，两者都会改变摩擦力。"
+    if "摩擦" in combined and ("F = μN" in combined or "公式" in combined or "正压力" in combined):
+        return "先判断是不是滑动摩擦，再把 μ 和 N 分开读，最后用控制变量法解释变化。"
     if "不等式" in combined:
         return "先确定定义域和可平方条件，再变形求范围，最后与定义域合并。"
     if "函数" in combined:
@@ -5751,6 +5886,82 @@ def micro_course_formula_lead_text(ctx):
     if contains_math_notation(lead) or contains_display_formula(lead):
         return "先把符号、条件和结论分开，再选择对应的变形方法。"
     return lead
+
+
+def micro_course_formula_card_details(ctx):
+    title = normalize_video_text(ctx.get("title", ""))
+    formula = normalize_video_text(ctx.get("formula", ""))
+    combined = " ".join([title, formula, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if "分类及特点" in combined or (
+        "静摩擦力" in combined and "滑动摩擦力" in combined and "滚动摩擦力" in combined
+    ):
+        return [
+            "静摩擦：没滑动，但有阻止滑动的趋势，方向和趋势相反。",
+            "滑动摩擦：已经滑动，常见于推箱子、拖动物体。",
+            "滚动摩擦：轮子或球滚动时产生，通常比滑动摩擦小。",
+        ]
+    if "影响因素分析" in combined:
+        return [
+            "控制变量：只比较一个因素；相同物体和接触方式下，分别改变 μ 或 N。",
+            "F = μN 中，μ 看接触面粗糙程度，N 看垂直接触面的正压力。",
+            "砂纸让 μ 变大；加重物让 N 变大，二者都可能让摩擦力增大。",
+        ]
+    if "摩擦" in combined and ("F = μN" in combined or "公式" in combined or "正压力" in combined):
+        return [
+            "滑动摩擦且已经发生相对滑动时，常用 F = μN；静止时先看静摩擦范围。",
+            "μ 由接触面材料和粗糙程度决定，N 是垂直接触面的正压力。",
+            "只改变 μ 或 N 中一个量，再比较摩擦力变化，结论才清楚。",
+        ]
+    if "乘法法则" in combined:
+        return [
+            "两个被开方数都要非负，即 a ≥ 0、b ≥ 0。",
+            "条件成立时，√a × √b 可以合并成 √(a×b)。",
+            "代入 4 和 9 检查：2×3 与 √36 都等于 6。",
+        ]
+    if "除法法则" in combined:
+        return [
+            "a ≥ 0，且分母里的 b 必须大于 0，不能让分母为 0。",
+            "条件成立时，√a ÷ √b 可以写成 √(a÷b)。",
+            "用 √8÷√2=√4=2 检查，同时记住 b > 0。",
+        ]
+    if "方程" in combined:
+        return [
+            "先写定义域，保证根号内表达式 ≥ 0。",
+            "两边平方只得到候选解，不能直接当最终答案。",
+            "把候选解代回原方程，排除平方带来的增根。",
+        ]
+    if "不等式" in combined:
+        return [
+            "先写定义域，再判断两边是否都非负。",
+            "能平方时再变形，解出普通不等式范围。",
+            "最终结果要和定义域取交集，不能漏条件。",
+        ]
+    if "函数" in combined:
+        return [
+            "根号内表达式必须 ≥ 0，这一步决定定义域。",
+            "算术平方根的输出一定 ≥ 0，这一步决定值域方向。",
+            "图像从定义域起点开始，再看单调性和交点。",
+        ]
+    cleaned = []
+    seen = set()
+    for point in ctx.get("points", []):
+        point = normalize_video_text(point)
+        if is_noise_line(point):
+            continue
+        key = enrichment_fingerprint(point)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(compact_sentence_without_ellipsis(point, 46))
+        if len(cleaned) >= 3:
+            break
+    fallbacks = [
+        "先确认公式适用范围，条件不成立就不能直接套用。",
+        "把文字量翻译成符号，分清已知量、未知量和要比较的量。",
+        "代入简单数或回到原题检查，防止把限制条件漏掉。",
+    ]
+    cleaned.extend(fallbacks[len(cleaned):])
+    return cleaned[:3]
 
 
 def micro_course_explain_line(title, rest, cards, limit=68):
@@ -5924,6 +6135,18 @@ def micro_course_check_example(title, rest, formula="", examples=None):
         return "√72=√(36×2)=6√2，先拆完全平方因子"
     if "应用场景" in combined:
         return "面积 9 → 边长 √9=3；斜边 c=√(a²+b²)"
+    if "分类及特点" in combined or (
+        "静摩擦力" in combined and "滑动摩擦力" in combined and "滚动摩擦力" in combined
+    ):
+        return "静摩擦看相对运动趋势，滑动摩擦看实际滑动，滚动摩擦通常更小。"
+    if "摩擦力的计算与应用" in combined:
+        return "先判类型，再看 μ 和 N，最后代入或比较。"
+    if "影响因素分析" in combined:
+        return "砂纸让 μ 变大，加重物让 N 变大，二者都会影响摩擦力。"
+    if any(keyword in combined for keyword in ("增大有益摩擦", "鞋底花纹", "轮胎花纹", "抓地力", "防滑")):
+        return "粗糙程度提高 → 抓地力增强 → 更不容易打滑。"
+    if any(keyword in combined for keyword in ("减小有害摩擦", "润滑油", "滚动代替滑动", "轴承")):
+        return "润滑或滚动接触能降低阻力，但关键部位仍要保留必要摩擦。"
     if "乘法法则" in combined:
         return "√4×√9=2×3=6，√(4×9)=√36=6"
     if "除法法则" in combined:
@@ -6410,14 +6633,14 @@ def layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, proje
     current, layer_num = add_bounded_text(filters, current, layer_num, lead_text, x=110, y=210, width=710, height=104, max_font=28, min_font=19, color="#111827", start=0.38)
     current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, ctx["formula"], x=940, y=225, width=760, height=245, start=0.50, accent="#2563eb")
     labels = ["条件", "表达", "检验"]
-    point_source = ctx["points"][:3] or ["看被开方数是否有意义", "把文字换成专业符号", "用具体数字代入验证"]
+    point_source = micro_course_formula_card_details(ctx)
     for idx, label in enumerate(labels):
         x = 175 + idx * 520
-        y = 620
+        y = 575
         accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
-        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 430, 125), f"{accent}@0.11", 28, 0.72 + idx * 0.08)
-        current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 32, y=y + 26, font_size=28, color=accent, bold=True, start=0.78 + idx * 0.08)
-        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point_source[idx] if idx < len(point_source) else label, x=x + 32, y=y + 60, width=365, height=56, max_font=23, min_font=16, color="#0f172a", bold=True, start=0.84 + idx * 0.08)
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 430, 168), f"{accent}@0.11", 28, 0.72 + idx * 0.08)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 32, y=y + 24, font_size=28, color=accent, bold=True, start=0.78 + idx * 0.08)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point_source[idx] if idx < len(point_source) else label, x=x + 32, y=y + 64, width=365, height=82, max_font=22, min_font=14, color="#0f172a", bold=True, start=0.84 + idx * 0.08)
     if ctx["examples"]:
         current, layer_num = add_filter_roundrect(filters, current, layer_num, (340, 835, 1240, 70), "#f5f3ff@0.92", 22, 1.02)
         current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"快速检验：{ctx.get('check') or ctx['examples'][0]}", x=390, y=846, width=1140, height=48, max_font=26, min_font=18, color="#5b21b6", bold=True, start=1.08)
@@ -6431,12 +6654,12 @@ def layout_micro_course_case_scene(ctx, slide_data, slide_num, duration, project
     text_x, text_w = 1015, 735
     current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=text_x, y=235, width=text_w, height=92, max_font=31, min_font=20, color="#111827", bold=True, start=0.52)
     for idx, point in enumerate(ctx["points"][:3]):
-        y = 390 + idx * 120
+        y = 382 + idx * 124
         accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
-        current, layer_num = add_filter_roundrect(filters, current, layer_num, (text_x, y, text_w, 84), "white@0.82", 24, 0.68 + idx * 0.08)
-        current, layer_num = add_filter_circle(filters, current, layer_num, text_x + 42, y + 42, 18, f"{accent}@0.22", 0.70 + idx * 0.08)
-        current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=text_x + 34, y=y + 27, font_size=22, color=accent, bold=True, start=0.72 + idx * 0.08)
-        current, layer_num = add_bounded_text(filters, current, layer_num, point, x=text_x + 82, y=y + 22, width=text_w - 120, height=38, max_font=25, min_font=17, color="#0f172a", bold=True, start=0.76 + idx * 0.08)
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (text_x, y, text_w, 104), "white@0.84", 24, 0.68 + idx * 0.08)
+        current, layer_num = add_filter_circle(filters, current, layer_num, text_x + 42, y + 52, 18, f"{accent}@0.22", 0.70 + idx * 0.08)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=text_x + 34, y=y + 37, font_size=22, color=accent, bold=True, start=0.72 + idx * 0.08)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point, x=text_x + 82, y=y + 18, width=text_w - 120, height=68, max_font=23, min_font=15, color="#0f172a", bold=True, start=0.76 + idx * 0.08)
     bottom = ctx.get("check") or (ctx["examples"][0] if ctx["examples"] else (ctx["formula"] or "用一个具体数检验结论是否成立。"))
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (265, 855, 1390, 64), "#ecfeff@0.90", 22, 1.02)
     current, layer_num = add_bounded_text(filters, current, layer_num, f"落地看：{bottom}", x=320, y=872, width=1280, height=30, max_font=24, min_font=17, color="#155e75", bold=True, start=1.08)
@@ -6754,7 +6977,7 @@ def generate_base_layout(duration, slide_num):
     filters.append("[bg1]drawbox=x=100:y=75:w=200:h=55:color=#ff9800:t=fill[bg2]")
     filters.append(
         "[bg2]drawtext=text='知识要点':"
-        "fontfile=/Windows/Fonts/msyhbd.ttc:fontsize=36:fontcolor=white:"
+        f"fontfile={CHINESE_FONT_BOLD}:fontsize=36:fontcolor=white:"
         "x=150:y=88[v0]"
     )
     return filters, "v0", 1
@@ -6770,7 +6993,7 @@ def layout_three_column(filters, current, layer_num, slide_data, slide_num):
     title_esc = escape_text(title)
     filters.append(
         f"[{current}]drawtext=text='{title_esc}':"
-        f"fontfile=/Windows/Fonts/msyhbd.ttc:fontsize=56:fontcolor=#1a1a1a:"
+        f"fontfile={CHINESE_FONT_BOLD}:fontsize=56:fontcolor=#1a1a1a:"
         f"x=100:y=170[v{layer_num}]"
     )
     current = f"v{layer_num}"
@@ -6779,7 +7002,7 @@ def layout_three_column(filters, current, layer_num, slide_data, slide_num):
     # 副标题
     filters.append(
         f"[{current}]drawtext=text='重点看这几个维度':"
-        f"fontfile=/Windows/Fonts/msyh.ttc:fontsize=28:fontcolor=#666666:"
+        f"fontfile={CHINESE_FONT}:fontsize=28:fontcolor=#666666:"
         f"x=100:y=240[v{layer_num}]"
     )
     current = f"v{layer_num}"
@@ -6843,7 +7066,7 @@ def layout_three_column(filters, current, layer_num, slide_data, slide_num):
         # 图标编号
         filters.append(
             f"[{current}]drawtext=text='0{i+1}':"
-            f"fontfile=/Windows/Fonts/msyhbd.ttc:fontsize=42:fontcolor=white:"
+            f"fontfile={CHINESE_FONT_BOLD}:fontsize=42:fontcolor=white:"
             f"x={card_x+48}:y={card_y+44}[v{layer_num}]"
         )
         current = f"v{layer_num}"
@@ -6857,7 +7080,7 @@ def layout_three_column(filters, current, layer_num, slide_data, slide_num):
                 line_esc = escape_text(line)
                 filters.append(
                     f"[{current}]drawtext=text='{line_esc}':"
-                    f"fontfile=/Windows/Fonts/msyh.ttc:fontsize=28:fontcolor=#333333:"
+                    f"fontfile={CHINESE_FONT}:fontsize=28:fontcolor=#333333:"
                     f"x={card_x+30}:y={y}[v{layer_num}]"
                 )
                 current = f"v{layer_num}"
@@ -6877,7 +7100,7 @@ def layout_two_column(filters, current, layer_num, slide_data, slide_num):
     title_esc = escape_text(title)
     filters.append(
         f"[{current}]drawtext=text='{title_esc}':"
-        f"fontfile=/Windows/Fonts/msyhbd.ttc:fontsize=56:fontcolor=#1a1a1a:"
+        f"fontfile={CHINESE_FONT_BOLD}:fontsize=56:fontcolor=#1a1a1a:"
         f"x=100:y=170[v{layer_num}]"
     )
     current = f"v{layer_num}"
@@ -6937,7 +7160,7 @@ def layout_two_column(filters, current, layer_num, slide_data, slide_num):
                 line_esc = escape_text(line)
                 filters.append(
                     f"[{current}]drawtext=text='{line_esc}':"
-                    f"fontfile=/Windows/Fonts/msyh.ttc:fontsize=30:fontcolor=#333333:"
+                    f"fontfile={CHINESE_FONT}:fontsize=30:fontcolor=#333333:"
                     f"x={card_x+40}:y={y}[v{layer_num}]"
                 )
                 current = f"v{layer_num}"
@@ -6956,7 +7179,7 @@ def layout_single_column(filters, current, layer_num, slide_data, slide_num):
     title_esc = escape_text(title)
     filters.append(
         f"[{current}]drawtext=text='{title_esc}':"
-        f"fontfile=/Windows/Fonts/msyhbd.ttc:fontsize=64:fontcolor=#1a1a1a:"
+        f"fontfile={CHINESE_FONT_BOLD}:fontsize=64:fontcolor=#1a1a1a:"
         f"x=(w-text_w)/2:y=180[v{layer_num}]"
     )
     current = f"v{layer_num}"
@@ -7005,7 +7228,7 @@ def layout_single_column(filters, current, layer_num, slide_data, slide_num):
             line_esc = escape_text(line)
             filters.append(
                 f"[{current}]drawtext=text='{line_esc}':"
-                f"fontfile=/Windows/Fonts/msyh.ttc:fontsize=32:fontcolor=#333333:"
+                f"fontfile={CHINESE_FONT}:fontsize=32:fontcolor=#333333:"
                 f"x=250:y={y}[v{layer_num}]"
             )
             current = f"v{layer_num}"
@@ -7603,7 +7826,7 @@ def slide_render_key(project, slide_num, slide_data, audio, recommendation, dura
     art = slide_art_asset(project, slide_num)
     visual = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
     payload = {
-        "version": 56,
+        "version": 60,
         "slide_number": slide_num,
         "slide": slide_data,
         "source_lines": source_slide_lines(project, slide_num),

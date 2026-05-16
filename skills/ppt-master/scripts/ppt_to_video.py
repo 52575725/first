@@ -6012,6 +6012,81 @@ def micro_course_formula_quick_check(ctx):
     return "用一个具体场景回看：条件是否满足、表达是否清楚、结论是否合理。"
 
 
+def micro_course_point_fallback_details(ctx):
+    title = normalize_video_text(ctx.get("title", ""))
+    formula = normalize_video_text(ctx.get("formula", ""))
+    combined = " ".join([title, formula, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if "摩擦" in combined:
+        if any(keyword in combined for keyword in ("实验", "探究", "数据", "距离", "速度", "测力计", "表格")):
+            return [
+                "数据记录：把接触面材质、正压力、滑行距离或测力计读数放进表格，保证每组条件清楚。",
+                "规律分析：只比较一个变量变化前后的数据，观察摩擦力对速度或运动距离的影响。",
+                "结论验证：把规律代回生活例子，如鞋底防滑、冰面易滑，检查解释是否一致。",
+            ]
+        if any(keyword in combined for keyword in ("增大", "减小", "有益", "有害", "应用")):
+            return [
+                "判断目标：先区分这是要增大有益摩擦，还是要减小有害摩擦。",
+                "选择方法：增大摩擦可增大粗糙程度或正压力；减小摩擦可润滑或变滑动为滚动。",
+                "场景检验：把方法放回鞋底、轮胎、轴承等例子，看是否符合实际用途。",
+            ]
+        return [
+            "产生条件：接触、挤压、接触面不完全光滑，并且存在相对运动或相对运动趋势。",
+            "方向判断：摩擦力沿接触面产生，方向总是阻碍相对运动或相对运动趋势。",
+            "类型区分：先看是否已经滑动，再区分静摩擦、滑动摩擦和滚动摩擦。",
+        ]
+    if contains_display_formula(formula) or contains_math_notation(formula) or any(keyword in combined for keyword in ("公式", "计算", "法则")):
+        return [
+            "先看适用条件：公式不是直接套用，要先确认变量范围、单位和方向。",
+            "再解释符号：逐一说明每个量代表什么，分清已知量、未知量和目标量。",
+            "最后代入检验：用简单数字或题目条件回查，避免漏掉限制条件。",
+        ]
+    if any(keyword in combined for keyword in ("实验", "探究", "数据", "表格", "记录")):
+        return [
+            "先明确变量：一次只改变一个条件，其余条件保持相同。",
+            "再整理数据：把观察值或测量值放进表格，便于横向比较。",
+            "最后得结论：从数据变化趋势中总结规律，而不是只复述现象。",
+        ]
+    if any(keyword in combined for keyword in ("概念", "定义", "含义")):
+        return [
+            "先说明对象：这个概念描述的是谁和谁之间的关系。",
+            "再补充条件：它在什么前提下成立，哪些情况不能直接使用。",
+            "最后落到例子：用一个生活场景检验概念是否说得通。",
+        ]
+    return [
+        "先抓关键词：找出本页最核心的对象、条件和结论。",
+        "再补充解释：说明它为什么成立，以及和前后内容有什么关系。",
+        "最后举例检验：用一个简单例子确认理解不是只背标题。",
+    ]
+
+
+def micro_course_enriched_points(ctx, limit=3):
+    fallbacks = micro_course_point_fallback_details(ctx)
+    raw_points = [normalize_video_text(point) for point in ctx.get("points", []) if normalize_video_text(point)]
+    enriched = []
+    seen = set()
+    for idx in range(limit):
+        point = raw_points[idx] if idx < len(raw_points) else ""
+        fallback = fallbacks[idx] if idx < len(fallbacks) else ""
+        if not point or is_sparse_formula_detail(point):
+            text = fallback
+        elif visual_text_len(point) < 28 and fallback:
+            text = fallback
+        else:
+            text = point
+        key = enrichment_fingerprint(text)
+        if key and key not in seen:
+            enriched.append(text)
+            seen.add(key)
+    for fallback in fallbacks:
+        if len(enriched) >= limit:
+            break
+        key = enrichment_fingerprint(fallback)
+        if key and key not in seen:
+            enriched.append(fallback)
+            seen.add(key)
+    return enriched[:limit]
+
+
 def micro_course_formula_card_details(ctx):
     title = normalize_video_text(ctx.get("title", ""))
     formula = normalize_video_text(ctx.get("formula", ""))
@@ -6388,14 +6463,15 @@ def micro_course_canvas(duration, project=None, slide_num=0, slide_data=None):
 
 
 def add_micro_course_point_stack(filters, current, layer_num, points, *, x, y, width, accent="#1d70c9", start=0.58):
-    for idx, point in enumerate(points[:4]):
-        row_y = y + idx * 78
-        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, row_y, width, 58), "white@0.78", 22, start + idx * 0.08)
-        current, layer_num = add_filter_circle(filters, current, layer_num, x + 32, row_y + 29, 18, f"{accent}@0.20", start + idx * 0.08)
-        current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=x + 24, y=row_y + 14, font_size=21, color=accent, bold=True, start=start + idx * 0.08)
+    visible_points = points[:3]
+    for idx, point in enumerate(visible_points):
+        row_y = y + idx * 108
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, row_y, width, 88), "white@0.78", 22, start + idx * 0.08)
+        current, layer_num = add_filter_circle(filters, current, layer_num, x + 34, row_y + 44, 18, f"{accent}@0.20", start + idx * 0.08)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=x + 26, y=row_y + 29, font_size=21, color=accent, bold=True, start=start + idx * 0.08)
         current, layer_num = add_bounded_text(
-            filters, current, layer_num, point, x=x + 65, y=row_y + 15,
-            width=width - 88, height=28, max_font=24, min_font=17,
+            filters, current, layer_num, point, x=x + 72, y=row_y + 18,
+            width=width - 105, height=54, max_font=23, min_font=15,
             color="#0f172a", bold=True, start=start + idx * 0.08 + 0.03
         )
     return current, layer_num
@@ -6753,7 +6829,8 @@ def layout_micro_course_opener(ctx, slide_data, slide_num, duration, project=Non
     else:
         left_w = 1100
     current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=155, y=255, width=left_w, height=88, max_font=34, min_font=22, color="#0f172a", bold=True, start=0.42)
-    current, layer_num = add_micro_course_point_stack(filters, current, layer_num, ctx["points"][:3], x=155, y=410, width=left_w, accent="#1d70c9", start=0.62)
+    points = micro_course_enriched_points(ctx, limit=3)
+    current, layer_num = add_micro_course_point_stack(filters, current, layer_num, points, x=155, y=410, width=left_w, accent="#1d70c9", start=0.62)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (155, 790, 1220, 86), "#dbeafe@0.82", 28, 0.96)
     current, layer_num = add_bounded_text(filters, current, layer_num, "学习路径：符号含义 / 限制条件 / 运算方法 / 题目检验。", x=205, y=812, width=1120, height=42, max_font=28, min_font=20, color="#08215c", bold=True, start=1.02)
     return filters, current, layer_num
@@ -6788,13 +6865,14 @@ def layout_micro_course_case_scene(ctx, slide_data, slide_num, duration, project
     current, layer_num = add_micro_course_math_visual(filters, current, layer_num, ctx, box=(110, 235, 820, 430), start=0.42, accent="#1d4ed8")
     text_x, text_w = 1015, 735
     current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=text_x, y=235, width=text_w, height=92, max_font=31, min_font=20, color="#111827", bold=True, start=0.52)
-    for idx, point in enumerate(ctx["points"][:3]):
+    points = micro_course_enriched_points(ctx, limit=3)
+    for idx, point in enumerate(points):
         y = 382 + idx * 124
         accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
         current, layer_num = add_filter_roundrect(filters, current, layer_num, (text_x, y, text_w, 104), "white@0.84", 24, 0.68 + idx * 0.08)
         current, layer_num = add_filter_circle(filters, current, layer_num, text_x + 42, y + 52, 18, f"{accent}@0.22", 0.70 + idx * 0.08)
         current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=text_x + 34, y=y + 37, font_size=22, color=accent, bold=True, start=0.72 + idx * 0.08)
-        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point, x=text_x + 82, y=y + 18, width=text_w - 120, height=68, max_font=23, min_font=15, color="#0f172a", bold=True, start=0.76 + idx * 0.08)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point, x=text_x + 82, y=y + 16, width=text_w - 120, height=74, max_font=22, min_font=14, color="#0f172a", bold=True, start=0.76 + idx * 0.08)
     bottom = ctx.get("check") or (ctx["examples"][0] if ctx["examples"] else (ctx["formula"] or "用一个具体数检验结论是否成立。"))
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (265, 855, 1390, 64), "#ecfeff@0.90", 22, 1.02)
     current, layer_num = add_bounded_text(filters, current, layer_num, f"落地看：{bottom}", x=320, y=872, width=1280, height=30, max_font=24, min_font=17, color="#155e75", bold=True, start=1.08)

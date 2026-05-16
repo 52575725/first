@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Recommend video components from extracted slide structure.
 
 The intended flow is:
@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 COMPONENT_INDEX_PATH = SKILL_DIR / "templates" / "components" / "video_components_index.json"
+ADVANCED_COMPONENT_INDEX_PATH = SKILL_DIR / "templates" / "components" / "advanced_video_components.json"
 CHARTS_INDEX_PATH = SKILL_DIR / "templates" / "charts" / "charts_index.json"
 
 
@@ -122,6 +123,34 @@ def _component_index_to_catalog(index_path: Path) -> List[Dict[str, Any]]:
     return catalog
 
 
+def _advanced_component_index_to_catalog(index_path: Path) -> List[Dict[str, Any]]:
+    """Load high-variance video components into the flat catalog shape."""
+    if not index_path.exists():
+        return []
+
+    data = json.loads(index_path.read_text(encoding="utf-8"))
+    components = data.get("components", {})
+    catalog = []
+    for component_id, item in components.items():
+        catalog.append(
+            {
+                "id": component_id,
+                "name": item.get("name", component_id),
+                "best_for": item.get("best_for") or item.get("content_shape", []),
+                "content_shape": item.get("content_shape", []),
+                "family": item.get("family", ""),
+                "kind": item.get("kind", ""),
+                "layout": item.get("layout", "diverse"),
+                "visual_treatment": item.get("visual_treatment", ""),
+                "video_treatment": item.get("video_treatment", ""),
+                "needs_image": item.get("needs_image", False),
+                "variety_weight": item.get("variety_weight", 0.8),
+                "library": "advanced_video_components",
+            }
+        )
+    return catalog
+
+
 def _charts_index_to_catalog(index_path: Path, limit: int = 70) -> List[Dict[str, Any]]:
     """Expose existing chart SVG templates as selectable visualization components."""
     if not index_path.exists():
@@ -154,6 +183,8 @@ def load_component_catalog() -> List[Dict[str, Any]]:
         merged[item["id"]] = {**item, "library": "legacy_compat"}
     for item in _component_index_to_catalog(COMPONENT_INDEX_PATH):
         merged[item["id"]] = {**merged.get(item["id"], {}), **item}
+    for item in _advanced_component_index_to_catalog(ADVANCED_COMPONENT_INDEX_PATH):
+        merged[item["id"]] = {**merged.get(item["id"], {}), **item}
     for item in _charts_index_to_catalog(CHARTS_INDEX_PATH):
         merged.setdefault(item["id"], item)
     return list(merged.values())
@@ -171,6 +202,9 @@ MARKET_RE = re.compile(r"(\u5e02\u573a|\u89c4\u6a21|\u84dd\u6d77|\u6d88\u8d39|\u
 REVENUE_RE = re.compile(r"(\u76c8\u5229|\u6536\u5165|\u8425\u6536|\u5229\u6da6|\u5546\u4e1a\u6a21\u5f0f|revenue|profit|business model)", re.I)
 TEAM_RE = re.compile(r"(\u56e2\u961f|\u6210\u5458|\u7ec4\u7ec7|CEO|CTO|COO|team|role)", re.I)
 IMAGE_RE = re.compile(r"(\u56fe\u7247|\u7167\u7247|\u573a\u666f|\u4ea7\u54c1|\u8bbe\u5907|\u57ce\u5e02|\u5730\u56fe|photo|image|product|scene|map)", re.I)
+MATH_RE = re.compile(r"(\u6839\u53f7|\u5e73\u65b9\u6839|\u7acb\u65b9\u6839|\u65b9\u7a0b|\u4e0d\u7b49\u5f0f|\u5316\u7b80|\u8fd0\u7b97|\u6709\u7406\u6570|\u65e0\u7406\u6570|\u51fd\u6570|鈭殀\\sqrt|radical|equation|formula)", re.I)
+FORMULA_RE = re.compile(r"(鈭殀\\sqrt|[a-zA-Z]\s*[=<>+\-*/^]|\d+\s*[+\-*/^]\s*\d+|\u516c\u5f0f|\u6cd5\u5219|\u6027\u8d28|\u63a8\u5bfc|\u8ba1\u7b97|\u6b65\u9aa4)", re.I)
+MISTAKE_RE = re.compile(r"(\u6613\u9519|\u9519\u8bef|\u6ce8\u610f|\u8bef\u533a|\u6b63\u786e|\u9519\u89e3|wrong|mistake|correct)", re.I)
 SOURCE_ASSET_RE = re.compile(
     r"(^|[/\\])slide_\d+_image_\d+\.(?:png|jpe?g|webp|gif|wmf|emf|svg)\)?$",
     re.IGNORECASE,
@@ -198,17 +232,32 @@ def fallback_visual_effect(slide: Dict[str, Any]) -> str:
     text = slide_text(slide)
     clean_text = "\n".join(line for line in text.splitlines() if not is_source_asset_reference(line))
 
+    if any(marker in clean_text for marker in ("\u76ee\u5f55", "\u4e3b\u8981\u5185\u5bb9", "\u5185\u5bb9\u63d0\u8981", "\u7ae0\u8282", "\u77e5\u8bc6\u5730\u56fe")):
+        return "radial_concept_map"
+    if any(key in clean_text for key in ("\u6cd5\u5219", "\u89c4\u5219", "\u6ce8\u610f", "\u8981\u70b9", "\u68c0\u67e5")) and len(clean_text.splitlines()) >= 4:
+        return "checkpoint_ladder"
+    if MISTAKE_RE.search(clean_text) or (COMPARE_RE.search(clean_text) and MATH_RE.search(clean_text)):
+        return "misconception_compare"
+    if MATH_RE.search(clean_text) and FORMULA_RE.search(clean_text):
+        if PROCESS_RE.search(clean_text) or len(re.findall(r"\d", clean_text)) >= 4:
+            return "formula_walkthrough"
+        return "blackboard_derivation"
+    if MATH_RE.search(clean_text) and page_type == "section":
+        return "magazine_spread"
+    if any(key in clean_text for key in ("\u5e94\u7528", "\u573a\u666f", "\u4f8b\u5b50", "\u6848\u4f8b", "\u751f\u6d3b")):
+        return "application_storyboard"
+
     if not clean_text.strip() and page_type in {"image_only", "section"}:
         return "section_title"
     if page_type == "section" or (density < 0.16 and visual_text_len(clean_text) <= 18):
         return "section_title"
-    if any(marker in clean_text for marker in ("本章主要内容", "主要内容", "目录", "内容提要")):
+    if any(marker in clean_text for marker in ("\u672c\u7ae0\u4e3b\u8981\u5185\u5bb9", "\u4e3b\u8981\u5185\u5bb9", "\u76ee\u5f55", "\u5185\u5bb9\u63d0\u8981")):
         return "three_card_summary"
     if len(re.findall(r"\b\d+\.\d+\b", clean_text)) >= 3:
         return "three_card_summary"
-    if any(key in clean_text for key in ("进制", "编码", "二进制", "十进制")) and any(key in clean_text for key in ("不同", "对比", "特点", "比较")):
+    if any(key in clean_text for key in ("\u8fdb\u5236", "\u7f16\u7801", "\u4e8c\u8fdb\u5236", "\u5341\u8fdb\u5236")) and any(key in clean_text for key in ("\u4e0d\u540c", "\u5bf9\u6bd4", "\u7279\u70b9", "\u6bd4\u8f83")):
         return "two_column_compare"
-    if any(key in clean_text for key in ("转换", "步骤", "从小数点", "补零", "分组")):
+    if any(key in clean_text for key in ("\u8f6c\u6362", "\u6b65\u9aa4", "\u4ece\u5c0f\u6570\u70b9", "\u8865\u96f6", "\u5206\u7ec4")):
         return "process_flow"
     if PROBLEM_RE.search(clean_text):
         return "problem_stack"
@@ -218,7 +267,7 @@ def fallback_visual_effect(slide: Dict[str, Any]) -> str:
         return "roadmap_timeline"
     if REVENUE_RE.search(clean_text):
         return "revenue_model"
-    if COMPARE_RE.search(clean_text) and any(key in clean_text for key in ("优势", "壁垒", "能力", "竞争力")):
+    if COMPARE_RE.search(clean_text) and any(key in clean_text for key in ("\u4f18\u52bf", "\u58c1\u5792", "\u80fd\u529b", "\u7ade\u4e89\u529b")):
         return "capability_matrix"
     if MARKET_RE.search(clean_text) and DATA_RE.search(clean_text):
         return "market_dashboard"
@@ -227,13 +276,13 @@ def fallback_visual_effect(slide: Dict[str, Any]) -> str:
     if page_type == "process" or signals.get("has_process") or PROCESS_RE.search(clean_text):
         if "\u95ed\u73af" in clean_text or "\u5faa\u73af" in clean_text:
             return "lifecycle_loop"
-        return "solution_flow"
+        return "formula_walkthrough" if MATH_RE.search(clean_text) else "solution_flow"
     if page_type == "data" or signals.get("has_data"):
         if DATA_RE.search(clean_text):
             return "chart_focus"
         return "kpi_cards"
     if int(layout.get("columns", 1) or 1) >= 3:
-        return "three_card_summary"
+        return "rounded_step_cards"
     return "callout_overlay"
 
 
@@ -265,7 +314,23 @@ def component_score(slide: Dict[str, Any], component_id: str) -> float:
     if component_id == "statement_focus":
         return 0.78 if density < 0.25 and len(bullets) <= 2 else 0.22
     if component_id == "quote_focus":
-        return 0.76 if any(mark in text for mark in ("“", "”", '"', "使命", "愿景")) and density < 0.35 else 0.18
+        return 0.76 if any(mark in text for mark in ("\u201c", "\u201d", '"', "\u4f7f\u547d", "\u613f\u666f")) and density < 0.35 else 0.18
+    if component_id == "blackboard_derivation":
+        return 0.93 if MATH_RE.search(text) and FORMULA_RE.search(text) and not PROCESS_RE.search(text) else 0.16
+    if component_id == "formula_walkthrough":
+        return 0.92 if MATH_RE.search(text) and (PROCESS_RE.search(text) or digit_count >= 4) else 0.17
+    if component_id == "checkpoint_ladder":
+        return 0.82 if len(bullets) >= 5 or any(key in text for key in ("\u6cd5\u5219", "\u89c4\u5219", "\u6ce8\u610f", "\u8981\u70b9", "\u68c0\u67e5")) else 0.16
+    if component_id == "radial_concept_map":
+        return 0.84 if MATH_RE.search(text) and (page_type == "section" or 3 <= len(bullets) <= 6 or columns >= 3) else 0.18
+    if component_id == "magazine_spread":
+        return 0.8 if density < 0.22 or page_type == "section" else 0.18
+    if component_id == "rounded_step_cards":
+        return 0.78 if 3 <= len(bullets) <= 5 or columns >= 3 else 0.2
+    if component_id == "misconception_compare":
+        return 0.88 if MISTAKE_RE.search(text) or (COMPARE_RE.search(text) and MATH_RE.search(text)) else 0.18
+    if component_id == "application_storyboard":
+        return 0.82 if any(key in text for key in ("\u5e94\u7528", "\u573a\u666f", "\u4f8b\u5b50", "\u6848\u4f8b", "\u751f\u6d3b", "\u51fd\u6570")) or IMAGE_RE.search(text) else 0.18
     if component_id == "bullet_reveal":
         return 0.35 + min(0.45, len(bullets) * 0.12)
     if component_id in {"three_card_summary", "insight_cards"}:
@@ -275,9 +340,9 @@ def component_score(slide: Dict[str, Any], component_id: str) -> float:
     if component_id == "solution_flow":
         return 0.87 if signals.get("has_process") or PROCESS_RE.search(text) else 0.2
     if component_id == "capability_matrix":
-        return 0.84 if COMPARE_RE.search(text) and any(key in text for key in ("优势", "壁垒", "能力", "moat")) else 0.2
+        return 0.84 if COMPARE_RE.search(text) and any(key in text for key in ("\u4f18\u52bf", "\u58c1\u5792", "\u80fd\u529b", "moat")) else 0.2
     if component_id == "before_after":
-        return 0.82 if any(key in text.lower() for key in ("before", "after", "过去", "现在", "原来", "目标", "转型")) else 0.17
+        return 0.82 if any(key in text.lower() for key in ("before", "after", "\u8fc7\u53bb", "\u73b0\u5728", "\u539f\u6765", "\u76ee\u6807", "\u8f6c\u578b")) else 0.17
     if component_id == "dense_grid":
         return 0.68 if len(bullets) >= 6 or columns >= 4 else 0.18
     if component_id == "split_text_visual":
@@ -289,11 +354,11 @@ def component_score(slide: Dict[str, Any], component_id: str) -> float:
     if component_id == "timeline":
         return 0.8 if TIME_RE.search(text) else 0.15
     if component_id == "roadmap_timeline":
-        return 0.88 if TIME_RE.search(text) and any(key in text for key in ("年", "规划", "阶段", "roadmap")) else 0.18
+        return 0.88 if TIME_RE.search(text) and any(key in text for key in ("\u5e74", "\u89c4\u5212", "\u9636\u6bb5", "roadmap")) else 0.18
     if component_id == "lifecycle_loop":
-        return 0.86 if any(key in text for key in ("闭环", "循环", "再生", "cycle", "loop")) else 0.18
+        return 0.86 if any(key in text for key in ("\u95ed\u73af", "\u5faa\u73af", "\u518d\u751f", "cycle", "loop")) else 0.18
     if component_id == "flywheel":
-        return 0.78 if any(key in text for key in ("增长", "参与", "复购", "网络效应", "flywheel")) else 0.16
+        return 0.78 if any(key in text for key in ("\u589e\u957f", "\u53c2\u4e0e", "\u590d\u8d2d", "\u7f51\u7edc\u6548\u5e94", "flywheel")) else 0.16
     if component_id == "kpi_cards":
         return 0.72 if DATA_RE.search(text) and digit_count >= 3 else 0.2
     if component_id == "metric_dashboard":
@@ -313,7 +378,7 @@ def component_score(slide: Dict[str, Any], component_id: str) -> float:
     if component_id in {"team_roster", "role_grid"}:
         return 0.86 if TEAM_RE.search(text) else 0.18
     if component_id == "org_chart":
-        return 0.72 if TEAM_RE.search(text) and any(key in text for key in ("组织", "架构", "汇报", "部门")) else 0.18
+        return 0.72 if TEAM_RE.search(text) and any(key in text for key in ("\u7ec4\u7ec7", "\u67b6\u6784", "\u6c47\u62a5", "\u90e8\u95e8")) else 0.18
     if component_id == "callout_overlay":
         return 0.45 + (0.2 if density > 0.45 else 0)
     if component_id in {"bar_chart", "horizontal_bar_chart", "line_chart", "donut_chart", "pie_chart", "waterfall_chart"}:
@@ -364,6 +429,77 @@ def rule_based_recommendation(slide: Dict[str, Any]) -> Dict[str, Any]:
         "component": {**primary, "score": 0.92},
         "effect_component": effect_component,
     }
+
+
+def diversify_recommendations(recommendations: List[Dict[str, Any]], slides: List[Dict[str, Any]]) -> None:
+    """Avoid long runs of the same recomposed component in generated videos."""
+    slide_by_number = {int(slide.get("slide_number", idx + 1)): slide for idx, slide in enumerate(slides)}
+    last_effect = ""
+    run_length = 0
+    math_cycle = [
+        "blackboard_derivation",
+        "formula_walkthrough",
+        "checkpoint_ladder",
+        "radial_concept_map",
+        "rounded_step_cards",
+        "misconception_compare",
+        "application_storyboard",
+    ]
+    repeated_effects = {
+        "formula_walkthrough",
+        "blackboard_derivation",
+        "checkpoint_ladder",
+        "rounded_step_cards",
+        "radial_concept_map",
+        "three_card_summary",
+    }
+    application_keywords = (
+        "\u5e94\u7528",
+        "\u573a\u666f",
+        "\u4f8b\u5b50",
+        "\u6848\u4f8b",
+        "\u51fd\u6570",
+        "\u751f\u6d3b",
+    )
+
+    for item in recommendations:
+        slide_number = int(item.get("slide_number", 0) or 0)
+        slide = slide_by_number.get(slide_number, {})
+        text = slide_text(slide)
+        strategy = item.setdefault("render_strategy", {})
+        effect = strategy.get("visual_effect") or strategy.get("effect_component") or ""
+
+        if effect == last_effect:
+            run_length += 1
+        else:
+            run_length = 1
+
+        should_diversify = run_length >= 2 and effect in repeated_effects
+        if should_diversify and MATH_RE.search(text):
+            cycle_index = max(0, slide_number - 1) % len(math_cycle)
+            candidate = math_cycle[cycle_index]
+            if MISTAKE_RE.search(text) or COMPARE_RE.search(text):
+                candidate = "misconception_compare"
+            elif any(key in text for key in application_keywords):
+                candidate = "application_storyboard"
+            elif candidate == effect:
+                candidate = math_cycle[(cycle_index + 1) % len(math_cycle)]
+
+            strategy["visual_effect"] = candidate
+            strategy["effect_component"] = candidate
+            item["alternatives"] = [candidate] + [
+                alt for alt in item.get("alternatives", []) if alt != candidate
+            ][:4]
+            item["reason"] = f"{item.get('reason', '')} Diversified adjacent math pages with {candidate}."
+            effect_component = next(
+                (component for component in COMPONENT_CATALOG if component["id"] == candidate),
+                {"id": candidate, "name": candidate},
+            )
+            item["effect_component"] = effect_component
+            effect = candidate
+            run_length = 1
+
+        last_effect = effect
 
 
 def build_reason(slide: Dict[str, Any], component: Dict[str, Any]) -> str:
@@ -530,6 +666,8 @@ def generate_recommendations(project_path: Path, llm_output: Path | None = None)
         recommendations = [rule_based_recommendation(slide) for slide in slides]
         source = "rules_fallback"
 
+    diversify_recommendations(recommendations, slides)
+
     for item in recommendations:
         item.setdefault("selection_source", source)
 
@@ -571,3 +709,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

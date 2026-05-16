@@ -46,14 +46,20 @@ except ImportError:  # pragma: no cover - runtime fallback
 CONCRETE_KEYWORDS = (
     "旧衣", "衣物", "纺织", "面料", "服装", "垃圾", "填埋", "焚烧", "回收箱",
     "分拣", "清洗", "消毒", "纤维", "工厂", "设备", "门店", "城市", "社区",
-    "团队", "消费者", "品牌", "产品", "材料", "fabric", "textile", "recycling",
-    "factory", "team", "product", "store", "city", "landfill",
+    "团队", "消费者", "品牌", "产品", "材料", "案例", "场景", "步骤", "流程",
+    "结构", "装置", "实验", "地图", "人物", "照片", "示意图", "图像", "函数",
+    "图形", "根号", "平方根", "二次根式", "数轴", "三角形", "面积", "边长",
+    "速度", "建筑", "工程", "用户", "竞赛", "创新", "创业", "fabric", "textile",
+    "recycling", "factory", "team", "product", "store", "city", "landfill",
+    "diagram", "example", "case", "process", "workflow", "map", "function",
+    "graph", "geometry",
 )
 
 ABSTRACT_KEYWORDS = (
     "战略", "模式", "价值", "愿景", "使命", "算法", "平台", "体系", "模型",
-    "利润", "收入", "市场规模", "政策", "优势", "壁垒", "规划", "roadmap",
-    "strategy", "model", "policy", "revenue", "profit", "advantage",
+    "利润", "收入", "市场规模", "政策", "优势", "壁垒", "规划", "定义", "概念",
+    "原理", "规律", "方法", "关系", "roadmap", "strategy", "model", "policy",
+    "revenue", "profit", "advantage",
 )
 
 NO_IMAGE_KEYWORDS = (
@@ -61,6 +67,30 @@ NO_IMAGE_KEYWORDS = (
 )
 
 SEARCH_QUERY_RULES = (
+    (("根号", "定义", "平方根"), "square root definition diagram"),
+    (("算术平方根", "平方根"), "arithmetic square root diagram"),
+    (("根号", "性质", "非负"), "square root nonnegative domain diagram"),
+    (("根号", "分类", "立方根"), "square root cube root comparison diagram"),
+    (("乘法", "根号"), "square root multiplication rule diagram"),
+    (("除法", "根号"), "square root division rule diagram"),
+    (("加减", "同类根式"), "like radicals addition subtraction diagram"),
+    (("化简", "完全平方因子"), "simplifying radicals perfect square factors diagram"),
+    (("无理数", "根号"), "irrational numbers square root number line diagram"),
+    (("方程", "根号"), "solving radical equations example diagram"),
+    (("不等式", "根号", "定义域"), "radical inequality domain diagram"),
+    (("金融", "复利"), "compound interest formula growth diagram"),
+    (("物理", "速度"), "physics velocity formula square root diagram"),
+    (("万有引力", "距离"), "physics gravity distance formula diagram"),
+    (("函数", "单调性"), "square root function monotonicity graph"),
+    (("函数", "图像"), "square root function graph"),
+    (("根号", "平方根", "开方"), "square root concept diagram"),
+    (("二次根式", "根式"), "radical expression math diagram"),
+    (("勾股", "直角三角形", "三角形"), "Pythagorean theorem diagram"),
+    (("定义域", "数轴"), "number line square root domain diagram"),
+    (("函数", "曲线", "图像"), "square root function graph"),
+    (("例题", "解题", "计算"), "math problem solving example"),
+    (("面积", "边长", "正方形"), "square area side length square root diagram"),
+    (("速度", "加速度"), "physics velocity acceleration diagram"),
     (("填埋", "垃圾", "废料"), "textile waste landfill"),
     (("焚烧", "污染"), "clothing waste pollution"),
     (("智能回收", "回收箱"), "clothing recycling bin"),
@@ -75,6 +105,74 @@ SEARCH_QUERY_RULES = (
     (("全国", "城市", "布局"), "China city skyline"),
     (("旧衣", "衣物", "纺织"), "textile recycling"),
 )
+
+RELEVANCE_ACCEPT_THRESHOLD = 0.34
+GENERIC_ASSET_TOKENS = {
+    "asset", "assets", "candidate", "cover", "diagram", "extracted", "file", "files",
+    "image", "img", "input", "media", "photo", "pic", "picture", "ppt", "pptx", "shape",
+    "slide", "source", "src", "tmp", "visual", "webp", "jpeg", "jpg", "png",
+}
+ENGLISH_STOPWORDS = {
+    "about", "after", "and", "are", "can", "for", "from", "how", "into", "its", "more",
+    "not", "of", "on", "our", "page", "part", "ppt", "slide", "the", "this", "that",
+    "their", "they", "use", "using", "with", "you",
+}
+CHINESE_STOPWORDS = {
+    "这一页", "本页", "页面", "内容", "介绍", "说明", "什么是", "我们", "可以", "进行",
+    "通过", "理解", "掌握", "知道", "分析", "展示", "问题", "方法",
+}
+TERM_TRANSLATIONS = {
+    "根号": "square root",
+    "平方根": "square root",
+    "开方": "square root",
+    "二次根式": "radical expression",
+    "根式": "radical expression",
+    "勾股": "Pythagorean theorem",
+    "直角三角形": "right triangle",
+    "数轴": "number line",
+    "定义域": "domain",
+    "函数": "function graph",
+    "曲线": "curve graph",
+    "图像": "graph diagram",
+    "面积": "area diagram",
+    "边长": "side length",
+    "正方形": "square geometry",
+    "速度": "velocity physics",
+    "加速度": "acceleration physics",
+    "旧衣": "used clothing",
+    "衣物": "clothing",
+    "纺织": "textile",
+    "面料": "fabric textile",
+    "服装": "clothing fashion",
+    "垃圾": "waste",
+    "填埋": "landfill",
+    "焚烧": "incineration",
+    "回收": "recycling",
+    "分拣": "sorting",
+    "清洗": "washing",
+    "消毒": "disinfection",
+    "纤维": "fiber textile",
+    "工厂": "factory",
+    "门店": "retail store",
+    "城市": "city",
+    "社区": "community",
+    "团队": "team",
+    "消费者": "consumer",
+    "品牌": "brand",
+    "产品": "product",
+    "材料": "material",
+    "竞赛": "competition",
+    "创新": "innovation",
+    "创业": "entrepreneurship",
+    "商业": "business",
+    "市场": "market",
+    "案例": "case study",
+    "流程": "process workflow",
+    "步骤": "process steps",
+    "结构": "structure diagram",
+    "实验": "experiment",
+    "地图": "map",
+}
 
 
 @dataclass
@@ -95,6 +193,7 @@ class ExtractedAsset:
     slide_number: int | None
     checksum: str
     quality: ImageQuality
+    semantic_hint: str = ""
 
 
 def now_iso() -> str:
@@ -113,6 +212,154 @@ def sanitize_token(value: str, fallback: str = "asset") -> str:
     safe = re.sub(r"[^0-9A-Za-z_-]+", "_", value.strip())
     safe = re.sub(r"_+", "_", safe).strip("_")
     return safe[:80] or fallback
+
+
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def extract_content_terms(text: str, *, max_terms: int = 12) -> list[str]:
+    """Extract compact topic terms from Chinese/English slide text."""
+    normalized = normalize_text(text)
+    terms: list[str] = []
+
+    known_terms = sorted(
+        set(CONCRETE_KEYWORDS + ABSTRACT_KEYWORDS + tuple(TERM_TRANSLATIONS)),
+        key=len,
+        reverse=True,
+    )
+    for term in known_terms:
+        if not term or len(term) < 2:
+            continue
+        if term.lower() in normalized and term not in CHINESE_STOPWORDS:
+            terms.append(term)
+
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9+-]{2,}", text):
+        lower = word.lower()
+        if lower not in ENGLISH_STOPWORDS and lower not in GENERIC_ASSET_TOKENS:
+            terms.append(lower)
+
+    for phrase in re.findall(r"[\u4e00-\u9fff]{2,8}", text):
+        if phrase in CHINESE_STOPWORDS:
+            continue
+        if len(phrase) <= 2:
+            terms.append(phrase)
+            continue
+        # Long Chinese runs often contain punctuation-stripped sentences. Keep
+        # informative 2-4 char windows that match known domain terms first.
+        for width in (4, 3, 2):
+            for i in range(0, max(0, len(phrase) - width + 1)):
+                piece = phrase[i : i + width]
+                if piece in TERM_TRANSLATIONS or piece in CONCRETE_KEYWORDS or piece in ABSTRACT_KEYWORDS:
+                    terms.append(piece)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(term)
+        if len(unique) >= max_terms:
+            break
+    return unique
+
+
+def asset_hint_text(asset: "ExtractedAsset") -> str:
+    pieces = [
+        asset.filename,
+        Path(asset.path).stem,
+        Path(asset.source_file).stem,
+        asset.source_type,
+        asset.semantic_hint,
+    ]
+    return " ".join(piece for piece in pieces if piece)
+
+
+def extract_asset_terms(asset: "ExtractedAsset") -> list[str]:
+    hint = asset_hint_text(asset)
+    terms: list[str] = []
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9+-]{2,}", hint):
+        lower = word.lower()
+        if lower not in GENERIC_ASSET_TOKENS and lower not in ENGLISH_STOPWORDS:
+            terms.append(lower)
+    for phrase in re.findall(r"[\u4e00-\u9fff]{2,8}", hint):
+        if phrase not in CHINESE_STOPWORDS:
+            terms.append(phrase)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(term)
+    return unique
+
+
+def looks_generic_asset_name(asset: "ExtractedAsset") -> bool:
+    hint = " ".join([asset.filename, Path(asset.path).stem, asset.source_type]).lower()
+    if re.search(r"(ppt_)?slide[_-]?\d+[_-]?image[_-]?\d+", hint):
+        return True
+    if re.search(r"ppt[_-]?media[_-]?\d+", hint):
+        return True
+    semantic_terms = extract_asset_terms(asset)
+    return len(semantic_terms) == 0
+
+
+def score_asset_relevance(text: str, asset: "ExtractedAsset") -> dict[str, Any]:
+    content_terms = extract_content_terms(text, max_terms=16)
+    asset_terms = extract_asset_terms(asset)
+    content_lowers = {term.lower() for term in content_terms}
+    asset_lowers = {term.lower() for term in asset_terms}
+    overlap = sorted(content_lowers & asset_lowers)
+
+    score = 0.0
+    reasons: list[str] = []
+    if not asset.quality.usable:
+        reasons.append(f"quality rejected: {asset.quality.reason or 'not usable'}")
+        return {
+            "score": 0.0,
+            "accepted": False,
+            "reason": "; ".join(reasons),
+            "content_terms": content_terms,
+            "asset_terms": asset_terms,
+            "overlap_terms": overlap,
+            "generic_name": looks_generic_asset_name(asset),
+        }
+
+    if asset.slide_number is not None:
+        score += 0.12
+        reasons.append("same-slide source image")
+    if overlap:
+        score += min(0.58, 0.24 + 0.12 * len(overlap))
+        reasons.append("text/asset term overlap: " + ", ".join(overlap[:5]))
+    if asset.semantic_hint:
+        score += 0.08
+        reasons.append("has source alt/name hint")
+    if looks_generic_asset_name(asset):
+        score -= 0.18
+        reasons.append("generic PPT media filename; no semantic proof")
+    if asset.source_type == "source_markdown_image" and asset_terms:
+        score += 0.08
+        reasons.append("markdown image path carries topic terms")
+
+    score = max(0.0, min(1.0, score))
+    accepted = score >= RELEVANCE_ACCEPT_THRESHOLD
+    if not accepted and not reasons:
+        reasons.append("no semantic overlap with slide content")
+    elif not accepted:
+        reasons.append("below relevance threshold")
+
+    return {
+        "score": round(score, 2),
+        "accepted": accepted,
+        "reason": "; ".join(reasons),
+        "content_terms": content_terms,
+        "asset_terms": asset_terms,
+        "overlap_terms": overlap,
+        "generic_name": looks_generic_asset_name(asset),
+    }
 
 
 def is_no_content_placeholder(text: str) -> bool:
@@ -194,6 +441,7 @@ def copy_unique_image(
     slide_number: int | None,
     min_width: int,
     min_height: int,
+    semantic_hint: str = "",
 ) -> ExtractedAsset | None:
     if not src.exists() or src.suffix.lower() not in IMAGE_EXTENSIONS:
         return None
@@ -215,6 +463,7 @@ def copy_unique_image(
             slide_number=slide_number,
             checksum=checksum,
             quality=quality,
+            semantic_hint=semantic_hint,
         )
         seen[checksum] = asset
         return asset
@@ -232,12 +481,13 @@ def copy_unique_image(
         slide_number=slide_number,
         checksum=checksum,
         quality=quality,
+        semantic_hint=semantic_hint,
     )
     seen[checksum] = asset
     return asset
 
 
-def iter_markdown_image_refs(markdown_path: Path) -> Iterable[tuple[int | None, Path]]:
+def iter_markdown_image_refs(markdown_path: Path) -> Iterable[tuple[int | None, Path, str]]:
     slide_number: int | None = None
     image_re = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
     for line in markdown_path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -249,7 +499,9 @@ def iter_markdown_image_refs(markdown_path: Path) -> Iterable[tuple[int | None, 
             rel = image_match.group(1).strip()
             if rel.startswith(("http://", "https://")):
                 continue
-            yield slide_number, (markdown_path.parent / rel).resolve()
+            alt_match = re.search(r"!\[([^\]]*)\]\(" + re.escape(rel) + r"\)", line)
+            alt_text = alt_match.group(1).strip() if alt_match else ""
+            yield slide_number, (markdown_path.parent / rel).resolve(), alt_text
 
 
 def extract_images_from_markdown_sources(
@@ -261,7 +513,7 @@ def extract_images_from_markdown_sources(
 ) -> list[ExtractedAsset]:
     assets: list[ExtractedAsset] = []
     for md_path in sorted((project / "sources").glob("*.md")):
-        for slide_number, image_path in iter_markdown_image_refs(md_path):
+        for slide_number, image_path, alt_text in iter_markdown_image_refs(md_path):
             hint = f"src_slide_{slide_number or 0:02d}_{image_path.stem}"
             asset = copy_unique_image(
                 image_path,
@@ -273,6 +525,7 @@ def extract_images_from_markdown_sources(
                 slide_number=slide_number,
                 min_width=min_width,
                 min_height=min_height,
+                semantic_hint=alt_text,
             )
             if asset:
                 assets.append(asset)
@@ -302,6 +555,29 @@ def extract_pptx_with_python_pptx(
             else:
                 yield shape
 
+    def shape_semantic_hint(shape: Any) -> str:
+        pieces: list[str] = []
+        for attr in ("name", "alternative_text", "alt_text"):
+            value = getattr(shape, attr, "")
+            if value:
+                pieces.append(str(value))
+        try:
+            for node in shape._element.xpath(".//p:cNvPr"):
+                for attr in ("name", "descr", "title"):
+                    value = node.get(attr)
+                    if value:
+                        pieces.append(str(value))
+        except Exception:
+            pass
+        unique: list[str] = []
+        seen_piece: set[str] = set()
+        for piece in pieces:
+            cleaned = re.sub(r"\s+", " ", piece).strip()
+            if cleaned and cleaned not in seen_piece:
+                seen_piece.add(cleaned)
+                unique.append(cleaned)
+        return " ".join(unique)
+
     for slide_idx, slide in enumerate(prs.slides, 1):
         image_idx = 0
         for shape in walk_shapes(slide.shapes):
@@ -323,6 +599,7 @@ def extract_pptx_with_python_pptx(
                     slide_number=slide_idx,
                     min_width=min_width,
                     min_height=min_height,
+                    semantic_hint=shape_semantic_hint(shape),
                 )
                 tmp.unlink(missing_ok=True)
                 if asset:
@@ -449,11 +726,20 @@ def load_slide_texts(project: Path) -> list[dict[str, Any]]:
 def score_segment_need(text: str) -> float:
     if not text:
         return 0.0
+    cleaned = re.sub(r"\s+", "", text).strip()
+    if cleaned in {"目录", "感谢观看", "谢谢观看", "thankyou", "thanks"}:
+        return 0.0
+    if re.fullmatch(r"\d{1,2}", cleaned):
+        return 0.0
+    if re.search(r"(目录|agenda)", text, re.I) and len(cleaned) < 18:
+        return 0.0
     score = 0.0
     if any(key in text for key in CONCRETE_KEYWORDS):
         score += 0.45
     if any(key in text for key in ABSTRACT_KEYWORDS):
         score += 0.18
+    if extract_content_terms(text, max_terms=4):
+        score += 0.2
     if any(key in text for key in NO_IMAGE_KEYWORDS):
         score -= 0.28
     if re.search(r"\d", text) and len(text) < 50:
@@ -463,21 +749,75 @@ def score_segment_need(text: str) -> float:
     return max(0.0, min(1.0, score))
 
 
-def choose_mode(text: str, slide_assets: list[ExtractedAsset]) -> str:
-    usable_existing = [asset for asset in slide_assets if asset.quality.usable]
-    if usable_existing:
-        return "existing"
+def select_relevant_existing_asset(text: str, slide_assets: list[ExtractedAsset]) -> tuple[ExtractedAsset | None, dict[str, Any]]:
+    scored = []
+    for asset in slide_assets:
+        relevance = score_asset_relevance(text, asset)
+        scored.append({"asset": asset, "relevance": relevance})
+    scored.sort(key=lambda item: item["relevance"]["score"], reverse=True)
+    accepted = next((item for item in scored if item["relevance"]["accepted"]), None)
+    diagnostics = {
+        "threshold": RELEVANCE_ACCEPT_THRESHOLD,
+        "candidates": [
+            {
+                "filename": item["asset"].filename,
+                "path": item["asset"].path,
+                "score": item["relevance"]["score"],
+                "accepted": item["relevance"]["accepted"],
+                "reason": item["relevance"]["reason"],
+                "content_terms": item["relevance"]["content_terms"],
+                "asset_terms": item["relevance"]["asset_terms"],
+                "overlap_terms": item["relevance"]["overlap_terms"],
+                "generic_name": item["relevance"]["generic_name"],
+            }
+            for item in scored
+        ],
+    }
+    if accepted:
+        return accepted["asset"], diagnostics
+    return None, diagnostics
+
+
+def choose_mode(text: str, slide_assets: list[ExtractedAsset]) -> tuple[str, ExtractedAsset | None, dict[str, Any]]:
+    selected_asset, diagnostics = select_relevant_existing_asset(text, slide_assets)
+    if selected_asset:
+        return "existing", selected_asset, diagnostics
     if any(key in text for key in CONCRETE_KEYWORDS):
-        return "search"
+        return "search", None, diagnostics
+    if extract_content_terms(text, max_terms=3):
+        return "search", None, diagnostics
     if any(key in text for key in ABSTRACT_KEYWORDS):
-        return "generate"
-    return "none"
+        return "generate", None, diagnostics
+    return "none", None, diagnostics
 
 
 def build_search_query(text: str) -> str:
+    matches = [
+        (len(keys), sum(len(key) for key in keys), query)
+        for keys, query in SEARCH_QUERY_RULES
+        if all(key in text for key in keys)
+    ]
+    if matches:
+        matches.sort(reverse=True)
+        return matches[0][2]
     for keys, query in SEARCH_QUERY_RULES:
         if any(key in text for key in keys):
             return query
+    terms = extract_content_terms(text, max_terms=5)
+    translated: list[str] = []
+    for term in terms:
+        translated.extend((TERM_TRANSLATIONS.get(term) or term).split())
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for term in translated:
+        lower = term.lower()
+        if len(lower) < 2 or lower in ENGLISH_STOPWORDS or lower in seen:
+            continue
+        seen.add(lower)
+        cleaned.append(term)
+    if cleaned:
+        suffix = "diagram" if any(key in text for key in ("图", "示意", "结构", "流程", "步骤", "函数", "数轴", "例题")) else "photo"
+        return " ".join(cleaned[:5] + [suffix])
     latin_words = re.findall(r"[A-Za-z][A-Za-z-]{2,}", text)
     if latin_words:
         return " ".join(latin_words[:4])
@@ -485,7 +825,10 @@ def build_search_query(text: str) -> str:
         return "sustainable fashion"
     if any(key in text for key in ("团队", "成员")):
         return "business team meeting"
-    return "textile recycling"
+    chinese_terms = re.findall(r"[\u4e00-\u9fff]{2,4}", text)
+    if chinese_terms:
+        return " ".join(chinese_terms[:4])
+    return "presentation topic visual"
 
 
 def build_generation_prompt(text: str, title: str) -> str:
@@ -495,6 +838,24 @@ def build_generation_prompt(text: str, title: str) -> str:
         "No text, no logos, no watermarks. Subject: "
         f"{compact[:260]}"
     )
+
+
+def summarize_asset_rejections(segment_decisions: list[dict[str, Any]], slide_assets: list[ExtractedAsset]) -> str:
+    if not slide_assets:
+        return ""
+    best: dict[str, Any] | None = None
+    for segment in segment_decisions:
+        for candidate in segment.get("existing_asset_relevance", {}).get("candidates", []):
+            if best is None or float(candidate.get("score") or 0.0) > float(best.get("score") or 0.0):
+                best = candidate
+    if best:
+        return (
+            "source image rejected by relevance check "
+            f"(best={best.get('filename')}, score={best.get('score')}, reason={best.get('reason')})"
+        )
+    if any(asset.quality.usable for asset in slide_assets):
+        return "source images available but no segment needs an image strongly enough"
+    return "source images failed quality checks"
 
 
 def plan_visual_assets(slides: list[dict[str, Any]], assets: list[ExtractedAsset]) -> list[dict[str, Any]]:
@@ -512,31 +873,37 @@ def plan_visual_assets(slides: list[dict[str, Any]], assets: list[ExtractedAsset
 
         segment_decisions = []
         for idx, segment in enumerate(segments[:8], 1):
-            score = score_segment_need(f"{title} {segment}")
-            mode = choose_mode(f"{title} {segment}", slide_assets) if score >= 0.34 else "none"
+            segment_text = f"{title} {segment}"
+            score = score_segment_need(segment_text)
+            selected_asset = None
+            relevance = {"threshold": RELEVANCE_ACCEPT_THRESHOLD, "candidates": []}
+            mode = "none"
+            if score >= 0.34:
+                mode, selected_asset, relevance = choose_mode(segment_text, slide_assets)
             segment_decisions.append(
                 {
                     "segment_index": idx,
                     "text": segment,
                     "need_score": round(score, 2),
                     "mode": mode,
-                    "query": build_search_query(f"{title} {segment}") if mode == "search" else "",
+                    "query": build_search_query(segment_text) if mode == "search" else "",
                     "prompt": build_generation_prompt(segment, title) if mode == "generate" else "",
+                    "selected_existing_asset": asdict(selected_asset) if selected_asset else None,
+                    "existing_asset_relevance": relevance,
                 }
             )
 
         actionable = next((item for item in segment_decisions if item["mode"] != "none"), None)
-        if actionable is None and any(asset.quality.usable for asset in slide_assets) and segment_decisions:
-            segment_decisions[0]["mode"] = "existing"
-            actionable = segment_decisions[0]
+        rejection_summary = summarize_asset_rejections(segment_decisions, slide_assets)
         decision = {
             "slide_number": slide_num,
             "title": title,
             "recommended_mode": actionable["mode"] if actionable else "none",
-            "reason": "reuse usable source PPT image" if actionable and actionable["mode"] == "existing"
+            "reason": "reuse source PPT image after relevance check" if actionable and actionable["mode"] == "existing"
             else "concrete real-world subject, use licensed search" if actionable and actionable["mode"] == "search"
             else "abstract/custom concept, use generation" if actionable and actionable["mode"] == "generate"
-            else "text/data/structure can be rendered without an image",
+            else rejection_summary or "text/data/structure can be rendered without an image",
+            "relevance_threshold": RELEVANCE_ACCEPT_THRESHOLD,
             "existing_assets": [asdict(asset) for asset in slide_assets],
             "segments": segment_decisions,
         }
@@ -587,16 +954,22 @@ def execute_decisions(
         }
 
         if mode == "existing":
-            usable = [
-                asset for asset in decision.get("existing_assets", [])
-                if asset.get("quality", {}).get("usable")
-            ]
-            if usable:
-                src = Path(usable[0]["path"])
+            segment = next((item for item in decision["segments"] if item["mode"] == mode), None)
+            selected_asset = segment.get("selected_existing_asset") if segment else None
+            if selected_asset and selected_asset.get("quality", {}).get("usable"):
+                src = Path(selected_asset["path"])
                 suffix = src.suffix.lower() or ".jpg"
                 dst = output_dir / f"slide_{slide_num:02d}_existing{suffix}"
                 shutil.copy2(src, dst)
-                selected.update({"status": "ready", "filename": dst.name, "path": str(dst)})
+                selected.update(
+                    {
+                        "status": "ready",
+                        "filename": dst.name,
+                        "path": str(dst),
+                        "source_path": str(src),
+                        "relevance": segment.get("existing_asset_relevance") if segment else {},
+                    }
+                )
                 completed.append(selected)
                 count += 1
             continue

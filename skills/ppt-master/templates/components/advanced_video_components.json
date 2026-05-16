@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "name": "Advanced PPT-to-video component registry",
+    "version": "2026-05-15",
+    "purpose": "Higher-variance video components used to recompose PPT pages into micro-course style scenes.",
+    "selection_rule": "Prefer these components when the source page is too plain, has unused whitespace, or needs teaching-style explanation instead of a direct PPT copy."
+  },
+  "components": {
+    "blackboard_derivation": {
+      "name": "Blackboard derivation",
+      "family": "math_teaching",
+      "kind": "math",
+      "layout": "diverse",
+      "best_for": ["formula definition", "radical expression", "proof-like explanation", "symbol-heavy page"],
+      "content_shape": ["one concept plus 2-5 supporting rules", "math notation with short explanation"],
+      "visual_treatment": "dark teaching board, chalk accent, formula focus, rounded note chips",
+      "video_treatment": "title first, then equation/rule blocks appear in teaching order",
+      "needs_image": false,
+      "variety_weight": 0.95
+    },
+    "formula_walkthrough": {
+      "name": "Formula walkthrough",
+      "family": "math_teaching",
+      "kind": "process",
+      "layout": "diverse",
+      "best_for": ["calculation steps", "simplification", "equation solving", "method workflow"],
+      "content_shape": ["3-6 ordered method steps", "rule plus example"],
+      "visual_treatment": "rounded step rail with a worked-example panel",
+      "video_treatment": "advance step by step with the example panel held on screen",
+      "needs_image": false,
+      "variety_weight": 0.92
+    },
+    "checkpoint_ladder": {
+      "name": "Checkpoint ladder",
+      "family": "teaching",
+      "kind": "process",
+      "layout": "diverse",
+      "best_for": ["rules", "common mistakes", "review points", "exam checkpoints"],
+      "content_shape": ["4-6 compact checkpoints", "dense rule list"],
+      "visual_treatment": "vertical ladder with rounded checkpoint blocks and status tokens",
+      "video_treatment": "checkpoints unlock one by one",
+      "needs_image": false,
+      "variety_weight": 0.9
+    },
+    "radial_concept_map": {
+      "name": "Radial concept map",
+      "family": "conceptual",
+      "kind": "cards",
+      "layout": "diverse",
+      "best_for": ["concept overview", "classification", "chapter map", "knowledge graph"],
+      "content_shape": ["central concept plus 3-5 branches"],
+      "visual_treatment": "central rounded node with orbiting concept pills",
+      "video_treatment": "center appears first, branches expand around it",
+      "needs_image": false,
+      "variety_weight": 0.88
+    },
+    "magazine_spread": {
+      "name": "Magazine spread",
+      "family": "editorial",
+      "kind": "hero",
+      "layout": "diverse",
+      "best_for": ["large whitespace", "cover-like slide", "single big claim", "section opening"],
+      "content_shape": ["headline plus short body", "low-density PPT page"],
+      "visual_treatment": "asymmetric editorial grid with a large quote/claim area and side notes",
+      "video_treatment": "headline settles first, side notes follow",
+      "needs_image": "optional",
+      "variety_weight": 0.86
+    },
+    "rounded_step_cards": {
+      "name": "Rounded step cards",
+      "family": "teaching",
+      "kind": "cards",
+      "layout": "diverse",
+      "best_for": ["3-5 parallel points", "method summary", "soft rounded visual tone"],
+      "content_shape": ["short title with several compact cards"],
+      "visual_treatment": "large-radius cards, soft color tokens, no sharp dashboard feel",
+      "video_treatment": "cards appear in a staggered rhythm",
+      "needs_image": false,
+      "variety_weight": 0.84
+    },
+    "misconception_compare": {
+      "name": "Misconception compare",
+      "family": "teaching",
+      "kind": "matrix",
+      "layout": "diverse",
+      "best_for": ["wrong vs right", "before after", "common mistake", "comparison"],
+      "content_shape": ["two opposing groups or two states"],
+      "visual_treatment": "two rounded panels with correction bridge and emphasis chip",
+      "video_treatment": "wrong/old side first, corrected side second",
+      "needs_image": false,
+      "variety_weight": 0.87
+    },
+    "application_storyboard": {
+      "name": "Application storyboard",
+      "family": "scenario",
+      "kind": "visual",
+      "layout": "diverse",
+      "best_for": ["application scenario", "case example", "real-world use", "scene explanation"],
+      "content_shape": ["one concept plus 3-4 use scenes"],
+      "visual_treatment": "storyboard frames with concise captions and a summary rail",
+      "video_treatment": "frames reveal like a short case story",
+      "needs_image": "optional",
+      "variety_weight": 0.83
+    }
+  }
+}

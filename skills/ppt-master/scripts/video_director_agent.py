@@ -340,6 +340,36 @@ def teaching_voiceover(title: str, subtitle: str, paragraphs: list[Any], bullets
     if not title:
         return ""
 
+    if "根号的应用场景" in title:
+        return cleanup_voiceover_text(
+            "根号的应用，核心是从平方关系反求原来的量。"
+            "几何里，已知正方形面积为9，边长就是根号9等于3；"
+            "直角三角形里，斜边满足c等于根号下a的平方加b的平方。"
+            "物理里，如果公式里先给出速度或距离的平方，也要通过开方还原。"
+            "所以看到应用题，先问哪一个量被平方了，再决定怎样开根号。"
+        )
+    if "根号乘法法则" in title:
+        return cleanup_voiceover_text(
+            "根号乘法先看条件：a和b都要大于等于0。"
+            "条件成立时，可以把根号a乘以根号b合并成根号下a乘b。"
+            "例如根号4乘根号9，左边是2乘3等于6，右边是根号36，也等于6。"
+            "这一步的重点不是背公式，而是知道合并前必须确认非负。"
+        )
+    if "根号除法法则" in title:
+        return cleanup_voiceover_text(
+            "根号除法比乘法多一个限制：分母不能为0，所以b必须大于0。"
+            "条件成立时，根号a除以根号b，可以写成根号下a除以b。"
+            "例如根号8除以根号2，合并后是根号4，结果等于2。"
+            "如果根号出现在分母里，还要通过同乘根式完成有理化。"
+        )
+    if "根号在函数中的应用" in title:
+        return cleanup_voiceover_text(
+            "根号放进函数里，第一步永远是看定义域。"
+            "比如y等于根号下x减2，必须先满足x减2大于等于0，所以x大于等于2。"
+            "图像从定义域的起点出发，只向右延伸。"
+            "后面讨论单调性、交点或取值范围，都不能离开这个定义域。"
+        )
+
     if not points and not subtitle:
         return title
 
@@ -420,6 +450,9 @@ def strip_page_lead(text: str, title: str) -> str:
         rf"^这一页(?:重点)?看{re.escape(title)}[，。]?",
         rf"^这一页围绕{re.escape(title)}展开[，。]?",
         rf"^这一页比较{re.escape(title)}[，。]?",
+        rf"^本页(?:主要)?讲{re.escape(title)}[，。]?",
+        rf"^本页(?:重点)?看{re.escape(title)}[，。]?",
+        rf"^本页围绕{re.escape(title)}展开[，。]?",
         rf"^围绕{re.escape(title)}展开[，,]?重点包括[：:]?",
         rf"^{re.escape(title)}这里抓住几个关键点[：:]?",
         rf"^{re.escape(title)}(?:的)?核心是[：:]?",
@@ -427,6 +460,9 @@ def strip_page_lead(text: str, title: str) -> str:
         r"^这一页(?:重点)?看",
         r"^这一页围绕",
         r"^这一页比较",
+        r"^本页(?:主要)?讲",
+        r"^本页(?:重点)?看",
+        r"^本页围绕",
     ]
     for pattern in patterns:
         text = re.sub(pattern, "", text).strip(" ，。；;")
@@ -523,12 +559,12 @@ def continuity_connector(slide_number: int, title: str, previous_title: str) -> 
     if any(keyword in title for keyword in ("无理数", "应用", "场景")):
         return f"理解规则之后，再把它放到{title}里看。"
     variants = [
-        f"有了{previous_title}的铺垫，接着看{title}。",
-        f"顺着刚才的思路，继续看{title}。",
+        f"有了{previous_title}的铺垫，{title}就更容易理解。",
+        f"顺着刚才的思路，{title}主要解决下一个问题。",
         f"接下来把重点转到{title}。",
-        f"再往下，来看{title}。",
+        f"再往下，{title}会把前面的规则用起来。",
         f"把前面的结论用起来，进入{title}。",
-        f"这一段继续推进到{title}。",
+        f"现在把视角切到{title}。",
     ]
     return variants[slide_number % len(variants)]
 
@@ -986,11 +1022,19 @@ class ScriptWriterAgent:
             chunks = sentence_chunks(voiceover)
             if not chunks:
                 chunks = [slide.get("title", f"Slide {slide_number}")]
-            per_chunk = max(1.2, duration / max(1, len(chunks)))
+            chunks = chunks[:10]
+            weights = [max(1.0, visual_text_len(chunk)) for chunk in chunks]
+            total_weight = sum(weights) or float(len(chunks))
+            min_span = min(1.4, max(0.75, duration / max(1, len(chunks) * 3.0)))
             timed_chunks = []
             cursor = 0.0
-            for chunk in chunks[:10]:
-                end = min(duration, cursor + per_chunk)
+            for idx, (chunk, weight) in enumerate(zip(chunks, weights)):
+                if idx == len(chunks) - 1:
+                    end = duration
+                else:
+                    remaining_min = min_span * (len(chunks) - idx - 1)
+                    proportional = duration * weight / total_weight
+                    end = min(duration - remaining_min, cursor + max(min_span, proportional))
                 timed_chunks.append(
                     {
                         "start": round(cursor, 2),

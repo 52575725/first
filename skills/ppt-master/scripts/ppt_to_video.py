@@ -11,6 +11,8 @@ import os
 import shutil
 import threading
 import time
+import math
+import html
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from functools import lru_cache
@@ -19,6 +21,7 @@ from functools import lru_cache
 VIDEO_W = 1920
 VIDEO_H = 1080
 MIN_SEGMENT_BYTES = 32 * 1024
+RENDER_CONTEXT = threading.local()
 
 
 class VideoConfig:
@@ -69,6 +72,14 @@ COMPONENT_LAYOUT_MAP = {
     "team_roster": "three_column",
     "role_grid": "three_column",
     "org_chart": "three_column",
+    "blackboard_derivation": "diverse",
+    "formula_walkthrough": "diverse",
+    "checkpoint_ladder": "diverse",
+    "radial_concept_map": "diverse",
+    "magazine_spread": "diverse",
+    "rounded_step_cards": "diverse",
+    "misconception_compare": "diverse",
+    "application_storyboard": "diverse",
 }
 
 
@@ -525,9 +536,64 @@ def source_slide_has_image(project, slide_num):
     return False
 
 
+def normalize_math_for_screen(text):
+    """Keep display math as professional notation while cleaning common variants."""
+    text = str(text or "")
+    text = re.sub(r"(?<![A-Za-z])V\s*(?=[(（0-9A-Za-zπ])", "√", text)
+    text = re.sub(r"(?<![A-Za-z])v\s*(?=[(（0-9π])", "√", text)
+    text = re.sub(r"正负\s*根号\s*([A-Za-z0-9π]+)", r"±√\1", text)
+    text = re.sub(r"正负\s*([A-Za-z0-9π]+)", r"±\1", text)
+    text = re.sub(r"(\d+)\s*[倍借]\s*根号\s*([A-Za-z0-9π]+)", r"\1√\2", text)
+    text = re.sub(r"根号\s*\(([^)）]+)\)", r"√(\1)", text)
+    text = re.sub(r"根号\s*（([^)）]+)）", r"√(\1)", text)
+    text = re.sub(r"根号\s*([A-Za-z0-9π]+)", r"√\1", text)
+    text = re.sub(r"(?<=[A-Za-z0-9π)）√])\s*[#＃]\s*(?=√|[A-Za-z0-9π(（])", " ÷ ", text)
+    radical_piece = r"(?:[A-Za-z0-9π]+)?\s*√\s*(?:[A-Za-z0-9π²³]+|\([^()（）]+\)|（[^()（）]+）)"
+    text = re.sub(
+        rf"({radical_piece})\s*(?:变成|化成|化为|化简为|写成|得到)\s*({radical_piece})",
+        r"\1 → \2",
+        text,
+    )
+    text = re.sub(r"([A-Za-z0-9)\]）π]+)\s*的平方(?!根)", r"\1²", text)
+    text = re.sub(r"([A-Za-z0-9)\]）π]+)\s*的立方(?!根)", r"\1³", text)
+    text = re.sub(r"\^\s*2\b", "²", text)
+    text = re.sub(r"\^\s*3\b", "³", text)
+    return text
+
+
+def restore_math_notation_for_subtitles(text):
+    """Recover concise math notation from voice-friendly subtitle text."""
+    text = normalize_video_text(text)
+    replacements = [
+        (r"正负\s*根号\s*([A-Za-z0-9π]+)", r"±√\1"),
+        (r"正负\s*([A-Za-z0-9π]+)", r"±\1"),
+        (r"根号\s*\(([^)）]+)\)", r"√(\1)"),
+        (r"根号\s*（([^)）]+)）", r"√(\1)"),
+        (r"根号\s*([A-Za-z0-9π]+)", r"√\1"),
+        (r"([A-Za-z0-9)\]）π]+)\s*的平方(?!根)", r"\1²"),
+        (r"([A-Za-z0-9)\]）π]+)\s*的立方(?!根)", r"\1³"),
+        (r"\s*乘以\s*", " × "),
+        (r"\s*除以\s*", " ÷ "),
+        (r"\s*大于等于\s*", " ≥ "),
+        (r"\s*小于等于\s*", " ≤ "),
+        (r"\s*不等于\s*", " ≠ "),
+        (r"\s*等于\s*", " = "),
+        (r"\s*大于\s*", " > "),
+        (r"\s*小于\s*", " < "),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+    text = re.sub(r"\s+([，。；：！？])", r"\1", text)
+    text = re.sub(r"([（(])\s+", r"\1", text)
+    text = re.sub(r"\s+([）)])", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def normalize_video_text(text):
     """Light cleanup for OCR/PPT text before recomposed video rendering."""
     text = str(text or "").strip()
+    text = normalize_math_for_screen(text)
     text = re.sub(r"([\u4e00-\u9fff])\1{2,}", r"\1", text)
     text = text.replace(": :", "：").replace("：：", "：")
     text = re.sub(r"\s+", " ", text)
@@ -546,6 +612,666 @@ def visual_text_len(text):
     for ch in str(text):
         total += 1.0 if "\u4e00" <= ch <= "\u9fff" else 0.55
     return total
+
+
+MATH_FONT = "/Windows/Fonts/times.ttf"
+MATH_TEXT_RE = re.compile(r"[A-Za-z0-9√±×÷=<>≤≥≠²³πμ→+\-*/^().（）\[\]\s,，、;；:：|]+")
+MATH_SIGNAL_RE = re.compile(r"[A-Za-z√±×÷=<>≤≥≠²³πμ→^]")
+STRONG_MATH_SIGNAL_RE = re.compile(r"(√|±|×|÷|≤|≥|≠|²|³|→|\^|=|[A-Za-z0-9]\s*[+\-*/<>]\s*[A-Za-z0-9√])")
+RADICAL_BODY_RE = re.compile(r"\s*([A-Za-z0-9π²³]+)")
+
+
+def has_cjk(text):
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text))
+
+
+def is_math_segment(text):
+    text = str(text or "")
+    return bool(text.strip() and not has_cjk(text) and MATH_SIGNAL_RE.search(text))
+
+
+def contains_math_notation(text):
+    return any(is_math_segment(match.group(0)) for match in MATH_TEXT_RE.finditer(str(text or "")))
+
+
+def contains_display_formula(text):
+    text = normalize_math_for_screen(str(text or ""))
+    return bool(STRONG_MATH_SIGNAL_RE.search(text))
+
+
+def is_pure_math_text(text):
+    text = normalize_math_for_screen(str(text or "")).strip()
+    if not text or has_cjk(text):
+        return False
+    if not contains_display_formula(text):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9√±×÷=<>≤≥≠²³πμ→+\-*/^().（）\[\]\s,，、;；:：|]+", text))
+
+
+def split_radical_tokens(segment):
+    """Split math text so radicals can be rendered with a vinculum."""
+    text = str(segment or "")
+    tokens = []
+    idx = 0
+    while idx < len(text):
+        root_idx = text.find("√", idx)
+        if root_idx < 0:
+            if idx < len(text):
+                tokens.append(("text", text[idx:]))
+            break
+        if root_idx > idx:
+            tokens.append(("text", text[idx:root_idx]))
+        body_start = root_idx + 1
+        if body_start >= len(text):
+            tokens.append(("text", "√"))
+            idx = body_start
+            continue
+        if text[body_start] in "(（":
+            close = ")" if text[body_start] == "(" else "）"
+            depth = 1
+            pos = body_start + 1
+            while pos < len(text):
+                if text[pos] == text[body_start]:
+                    depth += 1
+                elif text[pos] == close:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                pos += 1
+            if pos < len(text) and depth == 0:
+                body = text[body_start + 1:pos].strip()
+                tokens.append(("radical", body or " "))
+                idx = pos + 1
+            else:
+                body = text[body_start:].strip()
+                tokens.append(("radical", body or " "))
+                break
+            continue
+        match = RADICAL_BODY_RE.match(text, body_start)
+        if match:
+            body = match.group(1).strip()
+            if body:
+                tokens.append(("radical", body))
+                idx = match.end()
+                continue
+        tokens.append(("text", "√"))
+        idx = body_start
+    return [(kind, value) for kind, value in tokens if value]
+
+
+def radical_token_width(body, font_size):
+    return int(max(font_size * 1.05, font_size * 0.62 + estimate_text_px(body, font_size, True) + font_size * 0.16))
+
+
+def contains_radical_notation(text):
+    return "√" in str(text or "")
+
+
+def formula_asset_dir(project):
+    if not project:
+        return None
+    path = Path(project) / "temp_video" / "formula_assets"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def active_formula_assets():
+    assets = getattr(RENDER_CONTEXT, "formula_assets", None)
+    if assets is None:
+        assets = []
+        RENDER_CONTEXT.formula_assets = assets
+    return assets
+
+
+def math_font_path(bold=False):
+    candidates = [
+        "C:/Windows/Fonts/cambriab.ttf" if bold else "C:/Windows/Fonts/cambria.ttc",
+        "C:/Windows/Fonts/cambria.ttc",
+        "C:/Windows/Fonts/times.ttf",
+        "C:/Windows/Fonts/msyh.ttc",
+    ]
+    for path in candidates:
+        if path and Path(path).exists():
+            return path
+    return candidates[-1]
+
+
+def parse_radical_body(text, start):
+    text = str(text or "")
+    if start >= len(text):
+        return "", start
+    if text[start] in "(（[":
+        pairs = {"(": ")", "（": "）", "[": "]"}
+        close = pairs[text[start]]
+        depth = 1
+        pos = start + 1
+        while pos < len(text):
+            if text[pos] == text[start]:
+                depth += 1
+            elif text[pos] == close:
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1:pos].strip(), pos + 1
+            pos += 1
+        return text[start + 1:].strip(), len(text)
+    match = re.match(r"\s*([A-Za-z0-9π²³]+)", text[start:])
+    if match:
+        return match.group(1).strip(), start + match.end()
+    return "", start
+
+
+def formula_to_mathml(text):
+    """Convert compact formula text into small MathML fragments for browser-quality radical layout."""
+    text = normalize_math_for_screen(str(text or "")).strip()
+    text = text.replace("（", "(").replace("）", ")")
+    text = re.sub(r"\s+", " ", text)
+
+    def mi(token):
+        if not token:
+            return ""
+        escaped = html.escape(token)
+        if re.fullmatch(r"\d+(?:\.\d+)?", token):
+            return f"<mn>{escaped}</mn>"
+        return f"<mi>{escaped}</mi>"
+
+    def render_plain(segment):
+        out = []
+        for part in re.findall(r"[A-Za-z]+|[πμ]|\d+(?:\.\d+)?|[²³]|[±×÷=<>≤≥≠+\-*/(), ]|.", segment):
+            if not part or part.isspace():
+                out.append("<mspace width='0.28em'/>")
+            elif part in {"²", "³"}:
+                exp = "2" if part == "²" else "3"
+                base = out.pop() if out else "<mi></mi>"
+                out.append(f"<msup>{base}<mn>{exp}</mn></msup>")
+            elif re.fullmatch(r"[A-Za-z]+|[πμ]|\d+(?:\.\d+)?", part):
+                out.append(mi(part))
+            elif part in {"±", "×", "÷", "=", "<", ">", "≤", "≥", "≠", "+", "-", "*", "/"}:
+                op = {"*": "×", "/": "÷"}.get(part, part)
+                out.append(f"<mo>{html.escape(op)}</mo>")
+            elif part in {"(", ")", ","}:
+                out.append(f"<mo>{html.escape(part)}</mo>")
+            else:
+                out.append(f"<mtext>{html.escape(part)}</mtext>")
+        return "".join(out)
+
+    def render_expr(expr):
+        expr = str(expr or "").strip()
+        out = []
+        idx = 0
+        while idx < len(expr):
+            root_idx = expr.find("√", idx)
+            if root_idx < 0:
+                out.append(render_plain(expr[idx:]))
+                break
+            if root_idx > idx:
+                out.append(render_plain(expr[idx:root_idx]))
+            body, next_idx = parse_radical_body(expr, root_idx + 1)
+            if body:
+                out.append(f"<msqrt>{render_expr(body)}</msqrt>")
+                idx = next_idx
+            else:
+                out.append("<mo>√</mo>")
+                idx = root_idx + 1
+        return "".join(out)
+
+    return (
+        "<math xmlns='http://www.w3.org/1998/Math/MathML' display='block'>"
+        f"<mrow>{render_expr(text)}</mrow>"
+        "</math>"
+    )
+
+
+def _repo_root():
+    return Path(__file__).resolve().parents[3]
+
+
+def _ensure_repo_python_packages():
+    py_tag = f"{sys.version_info.major}{sys.version_info.minor}"
+    site_packages = _repo_root() / f".venv{py_tag}" / "Lib" / "site-packages"
+    if site_packages.exists() and str(site_packages) not in sys.path:
+        sys.path.insert(0, str(site_packages))
+
+
+def _ensure_mathtext_renderer(config_dir):
+    """Load matplotlib mathtext, adding the project venv path when the script is
+    launched with the system Python."""
+    if config_dir:
+        try:
+            Path(config_dir).mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault("MPLCONFIGDIR", str(config_dir))
+        except Exception:
+            pass
+
+    try:
+        from matplotlib import mathtext
+        from matplotlib.font_manager import FontProperties
+        return mathtext, FontProperties
+    except Exception:
+        pass
+
+    _ensure_repo_python_packages()
+
+    from matplotlib import mathtext
+    from matplotlib.font_manager import FontProperties
+    return mathtext, FontProperties
+
+
+def formula_to_mathtext(text):
+    """Convert compact screen math into matplotlib mathtext syntax."""
+    text = normalize_math_for_screen(str(text or "")).strip()
+    text = text.replace("（", "(").replace("）", ")")
+    text = re.sub(r"\s+", " ", text)
+    compact = re.sub(r"\s+", "", text)
+    if compact in {"F=μN", "f=μN"}:
+        return r"$F=\mu N$"
+    if compact in {"0≤fs≤μsN", "0≤f_s≤μ_sN", "0≤f静≤μsN"}:
+        return r"$0\leq f_s\leq \mu_s N$"
+    if compact in {"√a÷√b=√(a÷b)", "√a/√b=√(a/b)"}:
+        return r"$\frac{\sqrt{a}}{\sqrt{b}}=\sqrt{\frac{a}{b}}$"
+    if compact in {"√a×√b=√(a×b)", "√a*√b=√(a*b)"}:
+        return r"$\sqrt{a}\times\sqrt{b}=\sqrt{a\times b}$"
+    if compact in {"√a;a≥0", "√a；a≥0"}:
+        return r"$\sqrt{a},\quad a\geq0$"
+    if compact == "x²=a→x=√a":
+        return r"$x^2=a,\quad x\geq0\Rightarrow x=\sqrt{a}$"
+    if compact == "√9=3;x²=9→x=±3":
+        return r"$\sqrt{9}=3,\quad x^2=9\Rightarrow x=\pm3$"
+    if compact == "√(x+2)=x→x=2":
+        return r"$\sqrt{x+2}=x\Rightarrow x=2$"
+
+    op_map = {
+        "±": r"\pm",
+        "×": r"\times",
+        "*": r"\times",
+        "÷": r"\div",
+        "/": r"\div",
+        "≤": r"\leq",
+        "≥": r"\geq",
+        "≠": r"\neq",
+        "→": r"\rightarrow",
+        "π": r"\pi",
+        "μ": r"\mu",
+    }
+
+    def render_plain(segment):
+        out = []
+        token_re = r"[A-Za-z]+|[πμ]|\d+(?:\.\d+)?|[²³]|[±×÷=<>≤≥≠→+\-*/^(),\[\]\s,，、;；:：|]|."
+        for part in re.findall(token_re, str(segment or "")):
+            if not part:
+                continue
+            if part.isspace():
+                out.append(r"\,")
+            elif part == "²":
+                out.append("^2")
+            elif part == "³":
+                out.append("^3")
+            elif re.fullmatch(r"[A-Za-z]+|\d+(?:\.\d+)?", part):
+                out.append(part)
+            elif part in op_map:
+                out.append(op_map[part])
+            elif part in {"=", "<", ">", "+", "-", "^", "(", ")", ",", "[", "]"}:
+                out.append(part)
+            elif part in {"，", "、", ";", "；"}:
+                out.append(r",\quad ")
+            elif part in {":", "："}:
+                out.append(r":\quad ")
+            elif part == "|":
+                out.append(r"|")
+            else:
+                out.append(r"\mathrm{" + re.sub(r"[^A-Za-z0-9]+", "", part) + "}")
+        return "".join(out)
+
+    def render_expr(expr):
+        expr = str(expr or "").strip()
+        out = []
+        idx = 0
+        while idx < len(expr):
+            root_idx = expr.find("√", idx)
+            if root_idx < 0:
+                out.append(render_plain(expr[idx:]))
+                break
+            if root_idx > idx:
+                out.append(render_plain(expr[idx:root_idx]))
+            body, next_idx = parse_radical_body(expr, root_idx + 1)
+            if body:
+                out.append(r"\sqrt{" + render_expr(body) + "}")
+                idx = next_idx
+            else:
+                out.append(r"\sqrt{}")
+                idx = root_idx + 1
+        return "".join(out)
+
+    return "$" + render_expr(text) + "$"
+
+
+def _image_to_formula_alpha(image, color):
+    """Turn mathtext's white background into an antialiased transparent mask."""
+    from PIL import Image
+
+    fg = _hex_to_rgb(color)
+    bg = (255, 255, 255)
+    source = image.convert("RGBA")
+    result = Image.new("RGBA", source.size, (fg[0], fg[1], fg[2], 0))
+    src = source.load()
+    dst = result.load()
+    for y in range(source.height):
+        for x in range(source.width):
+            r, g, b, _ = src[x, y]
+            estimates = []
+            for pixel, fore, back in ((r, fg[0], bg[0]), (g, fg[1], bg[1]), (b, fg[2], bg[2])):
+                denom = back - fore
+                if abs(denom) > 1:
+                    estimates.append((back - pixel) / denom)
+            alpha = max(estimates) if estimates else 0.0
+            if alpha > 0.01:
+                alpha_i = int(_clamp(alpha * 255, 0, 255))
+                dst[x, y] = (fg[0], fg[1], fg[2], alpha_i)
+    return result
+
+
+def render_formula_asset_mathtext(out_dir, png_path, meta_path, formula, *, font_size, color, bold):
+    mathtext, FontProperties = _ensure_mathtext_renderer(out_dir.parent / "mplconfig")
+    from PIL import Image
+
+    raw_path = out_dir / f"{png_path.stem}.{os.getpid()}.{threading.get_ident()}.raw.png"
+    try:
+        expr = formula_to_mathtext(formula)
+        prop = FontProperties(
+            family=["DejaVu Sans", "Cambria Math", "Cambria", "Times New Roman"],
+            size=max(12, int(font_size)),
+            weight="bold" if bold else "normal",
+        )
+        mathtext.math_to_image(expr, raw_path, prop=prop, dpi=180, format="png", color=color)
+        image = Image.open(raw_path)
+        transparent = _image_to_formula_alpha(image, color)
+        bbox_alpha = transparent.getchannel("A").getbbox()
+        if not bbox_alpha:
+            return None
+        crop_pad = max(3, int(font_size * 0.08))
+        left = max(0, bbox_alpha[0] - crop_pad)
+        top = max(0, bbox_alpha[1] - crop_pad)
+        right = min(transparent.width, bbox_alpha[2] + crop_pad)
+        bottom = min(transparent.height, bbox_alpha[3] + crop_pad)
+        cropped = transparent.crop((left, top, right, bottom))
+        cropped.save(png_path)
+        meta = {
+            "width": cropped.width,
+            "height": cropped.height,
+            "formula": formula,
+            "renderer": "matplotlib_mathtext_v4",
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"path": png_path, "width": meta["width"], "height": meta["height"]}
+    finally:
+        try:
+            raw_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def render_formula_asset(project, text, *, font_size=48, color="#0f172a", bold=False):
+    """Render a formula to transparent PNG as one reusable visual layer."""
+    out_dir = formula_asset_dir(project)
+    if not out_dir:
+        return None
+    formula = normalize_math_for_screen(text)
+    if not formula or not contains_math_notation(formula):
+        return None
+    renderer_id = "pil_radical_v3" if contains_radical_notation(formula) else "matplotlib_mathtext_v4"
+    key_payload = json.dumps(
+        {
+            "formula": formula,
+            "font_size": int(font_size),
+            "color": color,
+            "bold": bool(bold),
+            "renderer": renderer_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = hashlib.sha256(key_payload).hexdigest()[:20]
+    png_path = out_dir / f"formula_{digest}.png"
+    meta_path = out_dir / f"formula_{digest}.json"
+    if png_path.exists() and meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if int(meta.get("width", 0)) > 0 and int(meta.get("height", 0)) > 0:
+                return {"path": png_path, "width": int(meta["width"]), "height": int(meta["height"])}
+        except Exception:
+            pass
+
+    if not contains_radical_notation(formula):
+        try:
+            asset = render_formula_asset_mathtext(
+                out_dir, png_path, meta_path, formula,
+                font_size=font_size, color=color, bold=bold
+            )
+            if asset:
+                return asset
+        except Exception:
+            pass
+
+    try:
+        _ensure_repo_python_packages()
+        from PIL import Image, ImageDraw, ImageFont
+
+        rgba = _hex_to_rgb(color) + (255,)
+        base_font = ImageFont.truetype(math_font_path(bold), int(font_size))
+        small_font = ImageFont.truetype(math_font_path(bold), max(12, int(font_size * 0.58)))
+
+        def bbox(font, value):
+            box = font.getbbox(str(value or " "))
+            return box[2] - box[0], box[3] - box[1], box
+
+        def radical_metrics(body_w):
+            root_w = max(18, int(font_size * 0.46))
+            gap = max(3, int(font_size * 0.06))
+            overhang = max(6, int(font_size * 0.14))
+            return root_w, gap, overhang
+
+        def measure_plain(segment):
+            w = 0
+            h = int(font_size * 1.18)
+            for part in re.findall(r"[A-Za-zπ]+|\d+(?:\.\d+)?|[²³]|[±×÷=<>≤≥≠→+\-*/(),，、;； ]|.", segment):
+                if not part:
+                    continue
+                if part.isspace():
+                    w += int(font_size * 0.28)
+                elif part in {"²", "³"}:
+                    tw, th, _ = bbox(small_font, "2" if part == "²" else "3")
+                    w += tw + 1
+                    h = max(h, int(font_size * 1.25))
+                else:
+                    glyph = {"*": "×", "/": "÷", "，": ",", "、": ",", "；": ";", "→": "→"}.get(part, part)
+                    tw, th, _ = bbox(base_font, glyph)
+                    w += tw + 2
+                    h = max(h, th + int(font_size * 0.36))
+            return max(1, w), max(1, h)
+
+        def measure_expr(expr):
+            w = 0
+            h = int(font_size * 1.20)
+            idx = 0
+            while idx < len(expr):
+                root_idx = expr.find("√", idx)
+                if root_idx < 0:
+                    tw, th = measure_plain(expr[idx:])
+                    w += tw
+                    h = max(h, th)
+                    break
+                if root_idx > idx:
+                    tw, th = measure_plain(expr[idx:root_idx])
+                    w += tw
+                    h = max(h, th)
+                body, next_idx = parse_radical_body(expr, root_idx + 1)
+                if body:
+                    bw, bh = measure_expr(body)
+                    root_w, gap, overhang = radical_metrics(bw)
+                    w += root_w + gap + bw + overhang
+                    h = max(h, bh + int(font_size * 0.42), int(font_size * 1.42))
+                    idx = next_idx
+                else:
+                    rw, rh, _ = bbox(base_font, "√")
+                    w += rw
+                    h = max(h, rh)
+                    idx = root_idx + 1
+            return max(1, w), max(1, h)
+
+        def draw_plain(draw, xy, segment):
+            x0, y0 = xy
+            cursor = x0
+            for part in re.findall(r"[A-Za-zπ]+|\d+(?:\.\d+)?|[²³]|[±×÷=<>≤≥≠→+\-*/(),，、;； ]|.", segment):
+                if not part:
+                    continue
+                if part.isspace():
+                    cursor += int(font_size * 0.28)
+                    continue
+                if part in {"²", "³"}:
+                    glyph = "2" if part == "²" else "3"
+                    draw.text((cursor, y0 - int(font_size * 0.28)), glyph, font=small_font, fill=rgba)
+                    cursor += bbox(small_font, glyph)[0] + 1
+                    continue
+                glyph = {"*": "×", "/": "÷", "，": ",", "、": ",", "；": ";", "→": "→"}.get(part, part)
+                draw.text((cursor, y0), glyph, font=base_font, fill=rgba)
+                cursor += bbox(base_font, glyph)[0] + 2
+            return cursor
+
+        def draw_expr(draw, xy, expr):
+            x0, y0 = xy
+            cursor = x0
+            idx = 0
+            while idx < len(expr):
+                root_idx = expr.find("√", idx)
+                if root_idx < 0:
+                    cursor = draw_plain(draw, (cursor, y0), expr[idx:])
+                    break
+                if root_idx > idx:
+                    cursor = draw_plain(draw, (cursor, y0), expr[idx:root_idx])
+                body, next_idx = parse_radical_body(expr, root_idx + 1)
+                if body:
+                    bw, bh = measure_expr(body)
+                    root_w, gap, overhang = radical_metrics(bw)
+                    stroke = max(2, int(font_size * 0.055))
+                    line_y = y0 + max(2, int(font_size * 0.06))
+                    body_x = cursor + root_w + gap
+                    body_y = y0 + int(font_size * 0.20)
+                    end_x = body_x + bw + overhang
+                    points = [
+                        (cursor, y0 + int(font_size * 0.62)),
+                        (cursor + int(root_w * 0.20), y0 + int(font_size * 0.56)),
+                        (cursor + int(root_w * 0.40), y0 + int(font_size * 0.94)),
+                        (cursor + int(root_w * 0.72), line_y),
+                        (end_x, line_y),
+                    ]
+                    draw.line(points, fill=rgba, width=stroke)
+                    draw_expr(draw, (body_x, body_y), body)
+                    cursor = end_x + gap
+                    idx = next_idx
+                else:
+                    cursor = draw_plain(draw, (cursor, y0), "√")
+                    idx = root_idx + 1
+            return cursor
+
+        content_w, content_h = measure_expr(formula)
+        pad_x = max(10, int(font_size * 0.22))
+        pad_y = max(8, int(font_size * 0.18))
+        image = Image.new("RGBA", (content_w + pad_x * 2, content_h + pad_y * 2), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(image)
+        draw_expr(draw, (pad_x, pad_y + int(font_size * 0.10)), formula)
+        alpha = image.getchannel("A")
+        bbox_alpha = alpha.getbbox()
+        if not bbox_alpha:
+            return None
+        crop_pad = max(3, int(font_size * 0.07))
+        left = max(0, bbox_alpha[0] - crop_pad)
+        top = max(0, bbox_alpha[1] - crop_pad)
+        right = min(image.width, bbox_alpha[2] + crop_pad)
+        bottom = min(image.height, bbox_alpha[3] + crop_pad)
+        cropped = image.crop((left, top, right, bottom))
+        cropped.save(png_path)
+        meta = {"width": cropped.width, "height": cropped.height, "formula": formula, "renderer": renderer_id}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"path": png_path, "width": meta["width"], "height": meta["height"]}
+    except Exception as exc:
+        if os.environ.get("PPT_MASTER_DEBUG_FORMULA"):
+            import traceback
+            traceback.print_exc()
+        return None
+
+
+def add_formula_overlay(filters, current, layer_num, text, *, x, y, width, height, font_size, color, bold=False, start=0.0, project=None):
+    project = project or getattr(RENDER_CONTEXT, "project", None)
+    asset = render_formula_asset(project, text, font_size=font_size, color=color, bold=bold)
+    if not asset:
+        text_esc = escape_text(text)
+        fontfile = math_font_path(bold)
+        filters.append(
+            f"[{current}]drawtext=text='{text_esc}':fontfile={fontfile}:"
+            f"fontsize={font_size}:fontcolor={color}:expansion=none:x={x}:y={y}"
+            f"{_enable_after(start)}[v{layer_num}]"
+        )
+        return f"v{layer_num}", layer_num + 1
+    assets = active_formula_assets()
+    input_index = len(assets)
+    assets.append(Path(asset["path"]))
+    iw = max(1, int(asset["width"]))
+    ih = max(1, int(asset["height"]))
+    scale = min(1.0, float(width) / iw, float(height) / ih)
+    out_w = max(1, int(iw * scale))
+    out_h = max(1, int(ih * scale))
+    overlay_x = int(x + (width - out_w) / 2)
+    overlay_y = int(y + (height - out_h) / 2)
+    label = f"formula{layer_num}"
+    filters.append(
+        f"[formula_in{input_index}]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,format=rgba[{label}]"
+    )
+    filters.append(
+        f"[{current}][{label}]overlay=x={overlay_x}:y={overlay_y}:shortest=1"
+        f"{_enable_after(start)}[v{layer_num}]"
+    )
+    return f"v{layer_num}", layer_num + 1
+
+
+def split_rich_text_segments(text):
+    text = str(text or "")
+    segments = []
+    pos = 0
+    for match in MATH_TEXT_RE.finditer(text):
+        start, end = match.span()
+        if start > pos:
+            segments.append((text[pos:start], False))
+        segment = match.group(0)
+        segments.append((segment, is_math_segment(segment)))
+        pos = end
+    if pos < len(text):
+        segments.append((text[pos:], False))
+    return [(segment, math_like) for segment, math_like in segments if segment]
+
+
+def estimate_text_px(text, font_size, math_like=False):
+    if math_like and contains_radical_notation(text):
+        total = 0
+        for kind, value in split_radical_tokens(text):
+            if kind == "radical":
+                total += radical_token_width(value, font_size)
+            else:
+                total += estimate_text_px(value, font_size, False)
+        return int(max(1, total))
+    total = 0.0
+    for ch in str(text):
+        if "\u4e00" <= ch <= "\u9fff":
+            total += font_size * 0.96
+        elif ch.isspace():
+            total += font_size * 0.35
+        elif ch in "²³":
+            total += font_size * 0.36
+        elif ch in "√∑∫±×÷≤≥≠":
+            total += font_size * 0.70
+        elif math_like:
+            total += font_size * 0.54
+        else:
+            total += font_size * 0.50
+    return int(max(1, total))
 
 
 def is_noise_line(text):
@@ -586,6 +1312,106 @@ def split_heading_subtitle(heading, subtitle=""):
             if left and right and visual_text_len(left) <= 12:
                 return left, subtitle or right
     return heading, subtitle
+
+
+EXAMPLE_HEADING_RE = re.compile(r"^(举例|例题|例子|示例|案例|例题提示|代入检查|演示)(?:\s*[：:].*)?$")
+
+
+def is_example_heading(text):
+    text = normalize_video_text(text).strip()
+    if not text:
+        return False
+    head = re.split(r"[：:]", text, 1)[0].strip()
+    return bool(EXAMPLE_HEADING_RE.match(text) or head in {"举例", "例题", "例子", "示例", "案例", "例题提示", "代入检查", "演示"})
+
+
+def is_formula_rule_text(text):
+    text = normalize_video_text(text)
+    formula_symbols = ("√", "±", "²", "³", "×", "÷", "≤", "≥", "≠", "=", "^")
+    return any(symbol in text for symbol in formula_symbols) or any(keyword in text for keyword in ("公式", "法则", "运算", "根号", "平方根", "化简"))
+
+
+def is_radical_division_rule(title, rest):
+    title = normalize_video_text(title)
+    text = title + " " + " ".join(normalize_video_text(line) for line in rest)
+    return "根号除法" in title or ("除法" in title and "√" in text)
+
+
+def merge_example_cards(cards, limit=4):
+    """Keep examples attached to a rule/formula card instead of floating alone."""
+    merged = []
+    examples = []
+    for card in cards:
+        title = normalize_video_text(card.get("title", ""))
+        subtitle = normalize_video_text(card.get("subtitle", ""))
+        body = normalize_video_text(card.get("body", ""))
+        if is_example_heading(title):
+            example_text = normalize_video_text(" ".join(part for part in (subtitle, body) if part))
+            if example_text:
+                examples.append(example_text)
+            continue
+        merged.append({**card, "title": title, "subtitle": subtitle, "body": body})
+
+    for example in examples:
+        if not merged:
+            merged.append({"title": "例题演示", "subtitle": "", "body": example})
+            continue
+        target_idx = next(
+            (
+                idx for idx, item in reversed(list(enumerate(merged)))
+                if is_formula_rule_text(item.get("title", "") + " " + item.get("body", ""))
+            ),
+            len(merged) - 1,
+        )
+        old_body = normalize_video_text(merged[target_idx].get("body", ""))
+        merged[target_idx]["body"] = normalize_video_text(" ".join(part for part in (old_body, f"例：{example}") if part))
+    return merged[:limit]
+
+
+def separate_example_cards(cards, rest=None, limit_examples=2):
+    main_cards = []
+    examples = []
+    for card in cards:
+        title = normalize_video_text(card.get("title", ""))
+        subtitle = normalize_video_text(card.get("subtitle", ""))
+        body = normalize_video_text(card.get("body", ""))
+        if is_example_heading(title):
+            example_text = normalize_video_text(" ".join(part for part in (subtitle, body) if part))
+            if example_text:
+                examples.append(example_text)
+            continue
+        main_cards.append({**card, "title": title, "subtitle": subtitle, "body": body})
+    for line in rest or []:
+        line = normalize_video_text(line)
+        if is_example_heading(line) and contains_math_notation(line):
+            examples.append(re.sub(r"^[^：:]{1,8}[：:]\s*", "", line))
+    deduped = []
+    seen = set()
+    for example in examples:
+        key = enrichment_fingerprint(example)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(example)
+        if len(deduped) >= limit_examples:
+            break
+    return main_cards, deduped
+
+
+def cards_are_sparse_or_unstable(cards):
+    if not cards:
+        return True
+    sparse = 0
+    unstable = 0
+    for card in cards:
+        title = normalize_video_text(card.get("title", ""))
+        subtitle = normalize_video_text(card.get("subtitle", ""))
+        body = normalize_video_text(card.get("body", ""))
+        if is_example_heading(title):
+            unstable += 1
+        if not body and not subtitle:
+            sparse += 1
+    return sparse >= max(2, len(cards) // 2 + 1) or unstable >= 1
 
 
 ORDERED_POINT_RE = re.compile(
@@ -862,6 +1688,7 @@ def clean_card_data(slide_data, slide_num, project=None):
 
     if not cards:
         cards = [{"title": title or "核心内容", "subtitle": "", "body": ""}]
+    cards = augment_teaching_cards(title, rest, cards, limit=3)
 
     return {
         "label": "知识要点",
@@ -886,6 +1713,81 @@ def add_filter_drawbox(filters, current, layer_num, box, color, thickness="fill"
         f"{_enable_after(start)}[v{layer_num}]"
     )
     return f"v{layer_num}", layer_num + 1
+
+
+def add_filter_segment(filters, current, layer_num, x1, y1, x2, y2, color, thickness=5, start=0.0):
+    dx = float(x2) - float(x1)
+    dy = float(y2) - float(y1)
+    length = max(1.0, (dx * dx + dy * dy) ** 0.5)
+    angle = math.atan2(dy, dx)
+    text = " " * max(1, int(length / 6))
+    text_esc = escape_text(text)
+    filters.append(
+        f"[{current}]drawtext=text='{text_esc}':fontfile=/Windows/Fonts/msyhbd.ttc:"
+        f"fontsize={int(thickness)}:fontcolor={color}:expansion=none:"
+        f"x={int(x1)}:y={int(y1 - thickness / 2)}:box=1:boxcolor={color}:boxborderw=0:"
+        f"rotate={angle:.5f}{_enable_after(start)}[v{layer_num}]"
+    )
+    return f"v{layer_num}", layer_num + 1
+
+
+def radial_connector_points(cx, cy, radius, box, gap=12):
+    x, y, w, h = [float(v) for v in box]
+    tx = x + w / 2
+    ty = y + h / 2
+    dx = tx - float(cx)
+    dy = ty - float(cy)
+    distance = max(1.0, (dx * dx + dy * dy) ** 0.5)
+    ux = dx / distance
+    uy = dy / distance
+    start_x = float(cx) + ux * (radius + gap)
+    start_y = float(cy) + uy * (radius + gap)
+
+    candidates = []
+    if abs(ux) > 1e-6:
+        edge_x = x if ux > 0 else x + w
+        t = (edge_x - float(cx)) / ux
+        iy = float(cy) + uy * t
+        if y <= iy <= y + h and t > 0:
+            candidates.append((t, edge_x, iy))
+    if abs(uy) > 1e-6:
+        edge_y = y if uy > 0 else y + h
+        t = (edge_y - float(cy)) / uy
+        ix = float(cx) + ux * t
+        if x <= ix <= x + w and t > 0:
+            candidates.append((t, ix, edge_y))
+    if candidates:
+        _, end_x, end_y = min(candidates, key=lambda item: item[0])
+    else:
+        end_x, end_y = tx, ty
+    end_x -= ux * gap
+    end_y -= uy * gap
+    return int(start_x), int(start_y), int(end_x), int(end_y)
+
+
+def add_filter_axis_line(filters, current, layer_num, x1, y1, x2, y2, color, thickness=6, start=0.0):
+    x1, y1, x2, y2 = [int(round(v)) for v in (x1, y1, x2, y2)]
+    thickness = max(1, int(thickness))
+    if abs(x2 - x1) >= abs(y2 - y1):
+        x = min(x1, x2)
+        w = max(thickness, abs(x2 - x1))
+        y = int(round((y1 + y2) / 2 - thickness / 2))
+        return add_filter_drawbox(filters, current, layer_num, (x, y, w, thickness), color, "fill", start)
+    y = min(y1, y2)
+    h = max(thickness, abs(y2 - y1))
+    x = int(round((x1 + x2) / 2 - thickness / 2))
+    return add_filter_drawbox(filters, current, layer_num, (x, y, thickness, h), color, "fill", start)
+
+
+def add_filter_elbow_connector(filters, current, layer_num, x1, y1, x2, y2, color, thickness=6, start=0.0):
+    if abs(x2 - x1) < thickness * 1.5 or abs(y2 - y1) < thickness * 1.5:
+        return add_filter_axis_line(filters, current, layer_num, x1, y1, x2, y2, color, thickness, start)
+    horizontal_first = abs(x2 - x1) >= abs(y2 - y1)
+    bend_x = x2 if horizontal_first else x1
+    bend_y = y1 if horizontal_first else y2
+    current, layer_num = add_filter_axis_line(filters, current, layer_num, x1, y1, bend_x, bend_y, color, thickness, start)
+    current, layer_num = add_filter_axis_line(filters, current, layer_num, bend_x, bend_y, x2, y2, color, thickness, start)
+    return current, layer_num
 
 
 def add_filter_roundrect(filters, current, layer_num, box, color, radius=34, start=0.0):
@@ -967,6 +1869,19 @@ def add_filter_drawtext(
     bold=False,
     start=0.0,
 ):
+    if contains_display_formula(text):
+        return add_filter_rich_text(
+            filters,
+            current,
+            layer_num,
+            text,
+            x=x,
+            y=y,
+            font_size=font_size,
+            color=color,
+            bold=bold,
+            start=start,
+        )
     fontfile = "/Windows/Fonts/msyhbd.ttc" if bold else "/Windows/Fonts/msyh.ttc"
     text_esc = escape_text(text)
     filters.append(
@@ -975,6 +1890,145 @@ def add_filter_drawtext(
         f"{_enable_after(start)}[v{layer_num}]"
     )
     return f"v{layer_num}", layer_num + 1
+
+
+def add_filter_radical_token(
+    filters,
+    current,
+    layer_num,
+    body,
+    *,
+    x,
+    y,
+    font_size,
+    color,
+    bold=False,
+    start=0.0,
+):
+    body = str(body or " ").strip() or " "
+    root_font = int(font_size * 1.22)
+    body_font = int(font_size)
+    root_w = int(root_font * 0.52)
+    body_x = int(x + root_w + font_size * 0.02)
+    root_y = int(y - font_size * 0.15)
+    body_y = int(y)
+    line_y = int(y + font_size * 0.04)
+    body_w = int(max(font_size * 0.45, estimate_text_px(body, body_font, True)))
+    line_h = max(2, int(font_size * 0.055))
+    root_esc = escape_text("√")
+    body_esc = escape_text(body)
+    filters.append(
+        f"[{current}]drawtext=text='{root_esc}':fontfile={MATH_FONT}:"
+        f"fontsize={root_font}:fontcolor={color}:expansion=none:x={int(x)}:y={root_y}"
+        f"{_enable_after(start)}[v{layer_num}]"
+    )
+    current = f"v{layer_num}"
+    layer_num += 1
+    current, layer_num = add_filter_drawbox(
+        filters, current, layer_num,
+        (body_x - max(1, int(font_size * 0.04)), line_y, body_w + max(3, int(font_size * 0.12)), line_h),
+        color, "fill", start
+    )
+    filters.append(
+        f"[{current}]drawtext=text='{body_esc}':fontfile={MATH_FONT}:"
+        f"fontsize={body_font}:fontcolor={color}:expansion=none:x={body_x}:y={body_y}"
+        f"{_enable_after(start)}[v{layer_num}]"
+    )
+    current = f"v{layer_num}"
+    layer_num += 1
+    width = max(radical_token_width(body, font_size), body_x - int(x) + body_w)
+    return current, layer_num, int(width)
+
+
+def add_filter_rich_text(
+    filters,
+    current,
+    layer_num,
+    text,
+    *,
+    x,
+    y,
+    font_size,
+    color,
+    bold=False,
+    start=0.0,
+):
+    cursor_x = int(x)
+    for segment, math_like in split_rich_text_segments(text):
+        segment = str(segment)
+        if not segment:
+            continue
+        if math_like and contains_display_formula(segment):
+            leading_spaces = len(segment) - len(segment.lstrip())
+            trailing_spaces = len(segment) - len(segment.rstrip())
+            if leading_spaces:
+                cursor_x += int(font_size * 0.30 * leading_spaces)
+            formula_text = segment.strip()
+            if formula_text:
+                token_w = max(
+                    estimate_text_px(formula_text, font_size, True),
+                    int(font_size * 1.30),
+                )
+                current, layer_num = add_formula_overlay(
+                    filters, current, layer_num, formula_text,
+                    x=cursor_x, y=y - int(font_size * 0.30),
+                    width=token_w + int(font_size * 0.45),
+                    height=max(36, int(font_size * 1.70)),
+                    font_size=font_size,
+                    color=color,
+                    bold=bold,
+                    start=start,
+                )
+                cursor_x += token_w + int(font_size * 0.16)
+            if trailing_spaces:
+                cursor_x += int(font_size * 0.30 * trailing_spaces)
+            continue
+        if math_like and contains_radical_notation(segment):
+            for token_type, token_value in split_radical_tokens(segment):
+                if token_type == "radical":
+                    formula_text = f"√{token_value}"
+                    token_w = max(
+                        radical_token_width(token_value, font_size),
+                        int(estimate_text_px(formula_text, font_size, True) * 1.25),
+                    )
+                    current, layer_num = add_formula_overlay(
+                        filters, current, layer_num, formula_text,
+                        x=cursor_x, y=y - int(font_size * 0.22),
+                        width=token_w + int(font_size * 0.36),
+                        height=max(36, int(font_size * 1.55)),
+                        font_size=font_size,
+                        color=color,
+                        bold=bold,
+                        start=start,
+                    )
+                    cursor_x += token_w + int(font_size * 0.12)
+                    continue
+                if not token_value:
+                    continue
+                text_esc = escape_text(token_value)
+                filters.append(
+                    f"[{current}]drawtext=text='{text_esc}':fontfile={MATH_FONT}:"
+                    f"fontsize={font_size}:fontcolor={color}:expansion=none:x={cursor_x}:y={y}"
+                    f"{_enable_after(start)}[v{layer_num}]"
+                )
+                current = f"v{layer_num}"
+                layer_num += 1
+                cursor_x += estimate_text_px(token_value, font_size, True)
+            continue
+        if math_like:
+            fontfile = MATH_FONT
+        else:
+            fontfile = "/Windows/Fonts/msyhbd.ttc" if bold else "/Windows/Fonts/msyh.ttc"
+        text_esc = escape_text(segment)
+        filters.append(
+            f"[{current}]drawtext=text='{text_esc}':fontfile={fontfile}:"
+            f"fontsize={font_size}:fontcolor={color}:expansion=none:x={cursor_x}:y={y}"
+            f"{_enable_after(start)}[v{layer_num}]"
+        )
+        current = f"v{layer_num}"
+        layer_num += 1
+        cursor_x += estimate_text_px(segment, font_size, math_like)
+    return current, layer_num
 
 
 def slide_visual_asset(project, slide_num):
@@ -1030,7 +2084,27 @@ def image_dimensions(path_str):
         with Image.open(path_str) as image:
             return image.size
     except Exception:
-        return 0, 0
+        pass
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                str(path_str),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=8,
+        )
+        if result.returncode == 0:
+            parts = [int(part) for part in result.stdout.strip().split(",")[:2]]
+            if len(parts) == 2 and parts[0] > 0 and parts[1] > 0:
+                return parts[0], parts[1]
+    except Exception:
+        pass
+    return 0, 0
 
 
 def source_slide_art(project, slide_num):
@@ -1042,6 +2116,14 @@ def source_slide_art(project, slide_num):
         width, height = image_dimensions(str(path))
         if width <= 0 or height <= 0:
             continue
+        if width < 180 or height < 120:
+            continue
+        if max(width, height) < 420 and path.stat().st_size < 18 * 1024:
+            continue
+        if width == height and slide_num in {1, 3, 8, 13, 18}:
+            continue
+        if height > width * 1.35 and path.stat().st_size < 12 * 1024:
+            continue
         area = width * height
         ratio = width / max(1, height)
         ratio_score = max(0.15, 1.0 - min(abs(ratio - 16 / 9), 1.2))
@@ -1049,7 +2131,7 @@ def source_slide_art(project, slide_num):
         if score > fallback_score:
             fallback = path
             fallback_score = score
-        if width >= 1200 and height >= 650:
+        if (width >= 900 and height >= 260) or (width >= 650 and height >= 360):
             score *= 1.4
         else:
             score *= 0.25
@@ -1057,6 +2139,14 @@ def source_slide_art(project, slide_num):
             best = path
             best_score = score
     return best or fallback
+
+
+def micro_course_should_use_image(title="", rest=None, slide_num=0, path=None):
+    return False
+
+
+def micro_course_visual_asset(project, slide_num, slide_data=None, title=None, rest=None):
+    return None
 
 
 def slide_art_asset(project, slide_num):
@@ -1140,6 +2230,30 @@ def add_filter_visual_cover(
     filters.append(
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
         f"crop={w}:{h},format=rgba,colorchannelmixer=aa={opacity:.3f}[{image_label}]"
+    )
+    filters.append(
+        f"[{current}][{image_label}]overlay=x={x}:y={y}:shortest=1"
+        f"{_enable_after(start)}[v{layer_num}]"
+    )
+    return f"v{layer_num}", layer_num + 1
+
+
+def add_filter_visual_contain(
+    filters,
+    current,
+    layer_num,
+    *,
+    box,
+    opacity=1.0,
+    start=0.0,
+):
+    """Overlay the slide visual input into a fixed box without cropping."""
+    x, y, w, h = box
+    image_label = f"img{layer_num}"
+    filters.append(
+        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=white@0.0,"
+        f"format=rgba,colorchannelmixer=aa={opacity:.3f}[{image_label}]"
     )
     filters.append(
         f"[{current}][{image_label}]overlay=x={x}:y={y}:shortest=1"
@@ -1577,20 +2691,22 @@ def should_skip_slide(slide_data, slide_num, project=None, audio_path=None):
 
 def adaptive_kind_from_component(recommendation):
     selected = selected_visual_component(recommendation)
-    if selected in {"cover_hero", "section_title", "statement_focus", "image_hero", "photo_story", "product_showcase", "image_pan_zoom"}:
+    if selected in {"cover_hero", "section_title", "statement_focus", "image_hero", "photo_story", "product_showcase", "image_pan_zoom", "magazine_spread"}:
         return "hero"
     if selected in {"problem_stack"}:
         return "problem"
-    if selected in {"capability_matrix", "two_column_compare", "before_after"}:
+    if selected in {"capability_matrix", "two_column_compare", "before_after", "misconception_compare"}:
         return "matrix"
     if selected in {"revenue_model", "financial_snapshot"}:
         return "business"
-    if selected in {"solution_flow", "process_flow", "timeline", "roadmap_timeline", "lifecycle_loop", "flywheel"}:
+    if selected in {"solution_flow", "process_flow", "timeline", "roadmap_timeline", "lifecycle_loop", "flywheel", "formula_walkthrough", "checkpoint_ladder"}:
         return "process"
     if selected in {"market_dashboard", "metric_dashboard", "kpi_cards", "chart_focus"}:
         return "metrics"
     if selected in {"team_roster", "role_grid", "org_chart"}:
         return "team"
+    if selected in {"blackboard_derivation", "radial_concept_map", "rounded_step_cards", "application_storyboard"}:
+        return "cards"
     return None
 
 
@@ -1609,6 +2725,8 @@ def adaptive_layout_kind(slide_data, slide_num, project=None, recommendation=Non
     layout = slide_data.get("layout", {})
     page_type = layout.get("page_type", "")
 
+    if is_formula_rule_text(text) and any(keyword in text for keyword in ("公式", "法则", "运算", "根号", "平方根", "化简", "例")):
+        return "process"
     if any(keyword in text for keyword in ("进制", "编码", "二进制", "十进制")) and any(keyword in text for keyword in ("不同", "对比", "特点", "比较")):
         return "matrix"
     if any(keyword in text for keyword in ("转换", "步骤", "从小数点", "补零", "分组")):
@@ -1788,6 +2906,53 @@ def concise_body(text, limit=58):
     return chunks[0] if chunks else normalize_video_text(text)
 
 
+def concise_card_body(text, limit=38):
+    return compact_sentence_without_ellipsis(text, limit)
+
+
+def compact_sentence_without_ellipsis(text, limit=42):
+    """Return a short complete-looking sentence without adding ellipsis."""
+    text = normalize_video_text(text)
+    if not text:
+        return ""
+    text = text.replace("……", "。").replace("...", "。").replace("…", "")
+    if visual_text_len(text) <= limit:
+        return text
+
+    clauses = [part.strip() for part in re.split(r"[。！？；;]", text) if part.strip()]
+    if not clauses:
+        clauses = [text]
+
+    picked = []
+    for clause in clauses:
+        clause = clause.strip(" ，,。；;：:")
+        candidate = "；".join([*picked, clause])
+        if visual_text_len(candidate) <= limit:
+            picked.append(clause)
+            continue
+        if picked:
+            break
+
+        fragments = [part.strip() for part in re.split(r"[，,、]", clause) if part.strip()]
+        subparts = []
+        for fragment in fragments:
+            candidate = "，".join([*subparts, fragment])
+            if visual_text_len(candidate) <= limit:
+                subparts.append(fragment)
+            elif subparts:
+                break
+            else:
+                first_line = wrapped_text_lines_full(fragment, limit)[0]
+                subparts.append(first_line.strip(" ，,。；;：:"))
+                break
+        if subparts:
+            picked.append("，".join(subparts))
+        break
+
+    summary = "；".join(picked).strip(" ，,。；;：:")
+    return summary or text.strip(" ，,。；;：:")
+
+
 def metric_token(text):
     text = normalize_video_text(text)
     match = re.search(r"(\d+(?:\.\d+)?\s*(?:%|万吨|吨|亿\+?|亿|万|年|元)?)", text)
@@ -1884,11 +3049,159 @@ def add_bounded_text(
 ):
     lines, font_size, line_height = fit_bounded_text(text, width, height, max_font, min_font, safety=safety)
     for idx, line in enumerate(lines):
-        current, layer_num = add_filter_drawtext(
-            filters, current, layer_num, line, x=x, y=y + idx * line_height,
-            font_size=font_size, color=color, bold=bold, start=start
-        )
+        if is_pure_math_text(line):
+            current, layer_num = add_formula_overlay(
+                filters, current, layer_num, line, x=x, y=y + idx * line_height,
+                width=width, height=line_height, font_size=font_size,
+                color=color, bold=bold, start=start
+            )
+        elif contains_display_formula(line):
+            caption, formula = split_formula_caption(line)
+            line_y = y + idx * line_height
+            if formula and caption:
+                formula_w = min(
+                    int(width * 0.42),
+                    max(int(width * 0.22), estimate_text_px(formula, font_size, True) + int(font_size * 1.20)),
+                )
+                text_w = max(1, width - formula_w - 14)
+                caption = ellipsize_visual_text(caption, text_units_for_width(text_w, font_size, 0.94))
+                current, layer_num = add_filter_drawtext(
+                    filters, current, layer_num, caption, x=x, y=line_y,
+                    font_size=font_size, color=color, bold=bold, start=start
+                )
+                current, layer_num = add_formula_overlay(
+                    filters, current, layer_num, formula,
+                    x=x + text_w + 14, y=line_y - int(font_size * 0.18),
+                    width=formula_w, height=max(line_height, int(font_size * 1.50)),
+                    font_size=font_size, color=color, bold=bold, start=start
+                )
+            elif formula:
+                current, layer_num = add_formula_overlay(
+                    filters, current, layer_num, formula, x=x, y=line_y,
+                    width=width, height=line_height, font_size=font_size,
+                    color=color, bold=bold, start=start
+                )
+            else:
+                current, layer_num = add_filter_rich_text(
+                    filters, current, layer_num, line, x=x, y=line_y,
+                    font_size=font_size, color=color, bold=bold, start=start
+                )
+        else:
+            current, layer_num = add_filter_drawtext(
+                filters, current, layer_num, line, x=x, y=y + idx * line_height,
+                font_size=font_size, color=color, bold=bold, start=start
+            )
     return current, layer_num
+
+
+def split_formula_caption(text):
+    text = normalize_video_text(text)
+    if not text:
+        return "", ""
+    snippets = []
+    for snippet in extract_formula_snippets(text):
+        if not snippet:
+            continue
+        if any(snippet != existing and snippet in existing for existing in snippets):
+            continue
+        snippets = [existing for existing in snippets if not (existing != snippet and existing in snippet)]
+        snippets.append(snippet)
+    formula = ", ".join(snippets[:2]) if snippets else ""
+    caption = text
+    for snippet in sorted(snippets, key=len, reverse=True):
+        caption = caption.replace(snippet, " ")
+    caption = re.sub(r"±?√\s*(?:[A-Za-z0-9π²³]+|\([^()（）]+\)|（[^()（）]+）)(?:[²³]|\^\s*[23])?", " ", caption)
+    caption = re.sub(r"\s*[:：]\s*$", "", caption)
+    caption = re.sub(r"[，,：:；;。\s]*、+[，,：:；;。\s]*", "，", caption)
+    caption = re.sub(r"[：:；;，,。]\s*[：:；;，,。]*", "，", caption)
+    caption = re.sub(r"(?:像|如)\s*等", "", caption)
+    caption = re.sub(r"\s+", " ", caption).strip(" ，、。；;:")
+    caption = re.sub(r"(?:例如|比如|如|像)$", "", caption).strip(" ，、。；;:")
+    if formula and visual_text_len(caption) > 26:
+        caption = re.split(r"[，。；;]", caption, 1)[0].strip()
+    return caption, formula
+
+
+def add_micro_course_safe_text(
+    filters,
+    current,
+    layer_num,
+    text,
+    *,
+    x,
+    y,
+    width,
+    height,
+    max_font,
+    min_font,
+    color,
+    bold=False,
+    start=0.0,
+    formula_color=None,
+):
+    """Avoid inline formula/text overlaps in compact micro-course cards."""
+    if not contains_display_formula(text):
+        return add_bounded_text(
+            filters, current, layer_num, text,
+            x=x, y=y, width=width, height=height,
+            max_font=max_font, min_font=min_font,
+            color=color, bold=bold, start=start
+        )
+    if is_pure_math_text(text):
+        return add_formula_overlay(
+            filters, current, layer_num, text,
+            x=x, y=y, width=width, height=height,
+            font_size=min(max_font, max(min_font, int(height * 0.70))),
+            color=formula_color or color, bold=bold, start=start
+        )
+    caption, formula = split_formula_caption(text)
+    if not formula:
+        return add_bounded_text(
+            filters, current, layer_num, caption or text,
+            x=x, y=y, width=width, height=height,
+            max_font=max_font, min_font=min_font,
+            color=color, bold=bold, start=start
+        )
+    if caption and height >= 54:
+        caption_h = min(max(22, int(height * 0.44)), height - 30)
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, caption,
+            x=x, y=y, width=width, height=caption_h,
+            max_font=max_font, min_font=min_font,
+            color=color, bold=bold, start=start
+        )
+        current, layer_num = add_formula_overlay(
+            filters, current, layer_num, formula,
+            x=x, y=y + caption_h + 4, width=width, height=max(24, height - caption_h - 4),
+            font_size=min(max_font, max(min_font, int((height - caption_h) * 0.72))),
+            color=formula_color or color, bold=bold, start=start + 0.02
+        )
+        return current, layer_num
+    if caption:
+        formula_w = min(
+            int(width * 0.38),
+            max(int(width * 0.20), estimate_text_px(formula, max_font, True) + int(max_font * 1.20)),
+        )
+        text_w = max(1, width - formula_w - 16)
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, caption,
+            x=x, y=y, width=text_w, height=height,
+            max_font=max_font, min_font=min_font,
+            color=color, bold=bold, start=start
+        )
+        current, layer_num = add_formula_overlay(
+            filters, current, layer_num, formula,
+            x=x + text_w + 16, y=y, width=formula_w, height=height,
+            font_size=min(max_font, max(min_font, int(height * 0.58))),
+            color=formula_color or color, bold=bold, start=start + 0.02
+        )
+        return current, layer_num
+    return add_formula_overlay(
+        filters, current, layer_num, formula,
+        x=x, y=y, width=width, height=height,
+        font_size=min(max_font, max(min_font, int(height * 0.68))),
+        color=formula_color or color, bold=bold, start=start
+    )
 
 
 def add_dot_grid(filters, current, layer_num, color="#d1d5db", start=0.0):
@@ -1922,6 +3235,8 @@ def diverse_cards(slide_data, slide_num, project, limit=4):
     cards = content_cards_from_lines(rest, limit=limit)
     if len(cards) < 2:
         cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:limit]
+    cards = merge_example_cards(cards, limit=limit)
+    cards = augment_teaching_cards(title, rest, cards, limit=limit)
     return title, cards
 
 
@@ -2299,7 +3614,7 @@ def content_cards_from_lines(rest, limit=4):
 
     ordered_cards = ordered_point_cards(clean, limit=limit)
     if ordered_cards:
-        return ordered_cards[:limit]
+        return merge_example_cards(ordered_cards, limit=limit)
 
     for count in (4, 3):
         if len(clean) >= count * 3 and all(is_card_heading(item) for item in clean[:count]):
@@ -2308,7 +3623,7 @@ def content_cards_from_lines(rest, limit=4):
             if all(is_card_subtitle(item) for item in middle):
                 for idx in range(count):
                     add_card(clean[idx], bodies[idx], middle[idx])
-                return cards[:limit]
+                return merge_example_cards(cards, limit=limit)
 
     idx = 0
     while idx + 3 < len(clean) and len(cards) < limit:
@@ -2325,7 +3640,7 @@ def content_cards_from_lines(rest, limit=4):
         break
 
     if len(cards) >= limit:
-        return cards[:limit]
+        return merge_example_cards(cards, limit=limit)
 
     for card in build_alternating_cards(clean, limit=limit):
         if len(cards) >= limit:
@@ -2338,6 +3653,58 @@ def content_cards_from_lines(rest, limit=4):
         for idx, body in enumerate(fallback_body_chunks(clean, limit=limit)):
             add_card(titles[idx] if idx < len(titles) else f"要点{idx + 1}", body)
 
+    return merge_example_cards(cards, limit=limit)
+
+
+def augment_teaching_cards(title, rest, cards, limit=4):
+    """Fill sparse PPT pages with short teaching cards instead of leaving empty space."""
+    cards = [
+        {
+            "title": normalize_video_text(card.get("title", "")),
+            "subtitle": normalize_video_text(card.get("subtitle", "")),
+            "body": normalize_video_text(card.get("body", "")),
+            **({"number": card.get("number")} if card.get("number") else {}),
+        }
+        for card in cards
+        if normalize_video_text(card.get("title", "")) or normalize_video_text(card.get("body", ""))
+    ]
+    if len(cards) >= limit and all(visual_text_len(card.get("body", "")) >= 10 for card in cards[:limit]):
+        return cards[:limit]
+
+    topic = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    supplements = []
+    if "根号" in topic or "平方根" in topic or "√" in topic:
+        supplements.extend([
+            {"title": "先看条件", "subtitle": "定义范围", "body": "实数范围内，根号下的被开方数通常要非负。"},
+            {"title": "例题提示", "subtitle": "代入检查", "body": "看到具体数字时，先判断能否开方，再看结果是否取非负值。"},
+            {"title": "易错提醒", "subtitle": "符号区分", "body": "√a 默认表示算术平方根，求平方根时才写 ±√a。"},
+            {"title": "应用场景", "subtitle": "回到问题", "body": "分类、化简和方程求解都要先确认根式是否有意义。"},
+        ])
+    elif any(key in topic for key in ("函数", "方程", "不等式")):
+        supplements.extend([
+            {"title": "先抓对象", "subtitle": "变量关系", "body": "先明确未知量、已知条件和目标结论，再选择运算方法。"},
+            {"title": "例题提示", "subtitle": "逐步验证", "body": "每变形一步都要检查是否改变定义域或解集。"},
+            {"title": "易错提醒", "subtitle": "条件不丢", "body": "含分母、根号或平方运算时，要额外检查限制条件。"},
+        ])
+    else:
+        supplements.extend([
+            {"title": "补充说明", "subtitle": "换句话说", "body": "把本页概念拆成定义、条件和用途三个层次来理解。"},
+            {"title": "例子联想", "subtitle": "落到场景", "body": "遇到抽象概念时，先找一个具体数字、案例或操作步骤。"},
+            {"title": "速记提示", "subtitle": "复盘顺序", "body": "先看关键词，再看限制条件，最后用一个例子检验。"},
+        ])
+
+    existing_keys = {enrichment_fingerprint(card.get("title", "") + card.get("body", "")) for card in cards}
+    for item in supplements:
+        if len(cards) >= limit:
+            break
+        key = enrichment_fingerprint(item["title"] + item["body"])
+        if is_duplicate_enrichment(key, existing_keys):
+            continue
+        cards.append(item)
+        existing_keys.add(key)
+
+    for idx, card in enumerate(cards[:limit]):
+        card.setdefault("number", f"{idx + 1:02d}")
     return cards[:limit]
 
 
@@ -2580,6 +3947,196 @@ def cards_from_items(items):
             "body": normalize_video_text(item.get("body", "")),
         })
     return cards
+
+
+def formula_card_body_summary(title_text, body_text, limit=42):
+    title_text = normalize_video_text(title_text)
+    body_text = normalize_video_text(body_text)
+    combined = f"{title_text} {body_text}"
+    if not body_text:
+        return ""
+
+    if "平方根" in combined and ("算术平方根" in combined or "非负" in combined):
+        if "±" in combined or "正负" in combined:
+            return "平方根有正负两个结果，√a 表示非负的算术平方根。"
+        return "√a 表示非负的算术平方根，结果要满足自乘还原。"
+    if "符号" in combined and "√" in combined:
+        if "√16" in combined:
+            return "√16 = 4，表示 16 的算术平方根是 4。"
+        if "√9" in combined:
+            return "√9 = 3，表示 9 的算术平方根是 3。"
+        return "√ 是算术平方根符号，结果默认取非负值。"
+    if "解决" in combined or "自乘" in combined or "问题" in combined:
+        return "先找自乘等于原数的数，再判断平方根是否取正负。"
+    if "定义" in combined and "根号" in combined:
+        return "按定义看被开方数、运算符号和结果范围。"
+    return compact_sentence_without_ellipsis(body_text, limit)
+
+
+def formula_walkthrough_cards(title, rest, limit=4):
+    cards = content_cards_from_lines(rest, limit=limit)
+    if not cards:
+        cards = cards_from_items(process_items_from_lines(title, rest))[:limit]
+    cleaned = []
+    seen = set()
+    for card in cards:
+        title_text = normalize_video_text(card.get("title", ""))
+        raw_body = normalize_video_text((card.get("subtitle") or "") + " " + (card.get("body") or ""))
+        body_text = formula_card_body_summary(title_text, raw_body, 42)
+        if not title_text and not body_text:
+            continue
+        key = enrichment_fingerprint(title_text + body_text)
+        if is_duplicate_enrichment(key, seen):
+            continue
+        seen.add(key)
+        cleaned.append({"title": title_text, "body": body_text})
+        if len(cleaned) >= limit:
+            break
+    if len(cleaned) < 3:
+        for item in process_items_from_lines(title, rest):
+            title_text = normalize_video_text(item.get("title", ""))
+            body_text = formula_card_body_summary(title_text, item.get("body", ""), 42)
+            key = enrichment_fingerprint(title_text + body_text)
+            if is_duplicate_enrichment(key, seen):
+                continue
+            seen.add(key)
+            cleaned.append({"title": title_text, "body": body_text})
+            if len(cleaned) >= limit:
+                break
+    if len(cleaned) < 3:
+        cleaned = [
+            {"title": card.get("title", ""), "body": (card.get("subtitle") or "") + " " + (card.get("body") or "")}
+            for card in augment_teaching_cards(title, rest, cleaned, limit=limit)
+        ]
+    if len(cleaned) < limit:
+        topic_text = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+        supplemental = []
+        if "√" in topic_text or "平方根" in topic_text:
+            supplemental.append({
+                "title": "例题检验",
+                "body": "x² = 9 → x = ±3；而 √9 = 3。",
+            })
+        for card in supplemental:
+            key = enrichment_fingerprint(card["title"] + card["body"])
+            if is_duplicate_enrichment(key, seen):
+                continue
+            seen.add(key)
+            cleaned.append(card)
+            if len(cleaned) >= limit:
+                break
+    return cleaned[:limit]
+
+
+def extract_formula_snippets(text):
+    text = normalize_video_text(text)
+    snippets = []
+    radical_atom = r"±?√\s*(?:[A-Za-z0-9π²³]+|\([^()（）]+\)|（[^()（）]+）)"
+    radical_expr = rf"(?:\(?\s*{radical_atom}\s*\)?(?:[²³]|\^\s*[23])?)"
+    radical_list_re = re.compile(rf"{radical_atom}(?:\s*[、,，]\s*{radical_atom})+")
+
+    relation_ops = set("=≥≤<>≠→")
+    formula_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789π√±²³+-*/×÷=<>≤≥≠→^().（）[]|,，、;； ")
+
+    def is_formula_char(ch):
+        return ch in formula_chars or ch.isspace()
+
+    def trim_formula_candidate(candidate):
+        candidate = re.sub(r"\s+", " ", candidate).strip(" ，、。；;:")
+        candidate = re.sub(r"^[,，、;；\s]+|[,，、;；\s]+$", "", candidate)
+        return candidate
+
+    def collect_relation_candidates(value):
+        for idx, ch in enumerate(value):
+            if ch not in relation_ops:
+                continue
+            left = idx - 1
+            while left >= 0 and is_formula_char(value[left]):
+                left -= 1
+            right = idx + 1
+            while right < len(value) and is_formula_char(value[right]):
+                right += 1
+            candidate = trim_formula_candidate(value[left + 1:right])
+            if not candidate or not any(op in candidate for op in relation_ops):
+                continue
+            if contains_math_notation(candidate):
+                snippets.append(candidate)
+
+    if any(keyword in text for keyword in ("摩擦", "正压力", "动摩擦因数", "静摩擦")):
+        if re.search(r"F\s*=\s*μ\s*N", text, re.IGNORECASE):
+            snippets.append("F = μN")
+        if re.search(r"f\s*=\s*μ\s*N", text, re.IGNORECASE):
+            snippets.append("f = μN")
+        if re.search(r"μs\s*N|μ_s\s*N", text, re.IGNORECASE):
+            snippets.append("0 ≤ fs ≤ μsN")
+
+    for marker in ("如", "可写作", "即"):
+        if marker in text:
+            tail = text.split(marker, 1)[1]
+            tail = re.split(r"[，。；;]", tail, 1)[0].strip()
+            if contains_math_notation(tail):
+                list_match = radical_list_re.search(tail)
+                snippets.append(list_match.group(0).strip() if list_match else tail)
+    collect_relation_candidates(text)
+    snippets.extend(match.group(0).strip() for match in radical_list_re.finditer(text))
+    radical_re = re.compile(radical_expr)
+    snippets.extend(match.group(0).strip() for match in radical_re.finditer(text))
+    cleaned = []
+    seen = set()
+    for snippet in snippets:
+        snippet = re.sub(r"\s+", " ", snippet).strip(" ，、。；;")
+        if not snippet or not contains_math_notation(snippet):
+            continue
+        if any(snippet != existing and snippet in existing for existing in cleaned):
+            continue
+        key = enrichment_fingerprint(snippet)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(concise_body(snippet, 24))
+    return cleaned
+
+
+def formula_example_lines(rest, cards, fallback_title, limit=3):
+    formula_candidates = []
+    topic_text = " ".join([normalize_video_text(fallback_title), *[normalize_video_text(line) for line in rest]])
+    for line in rest:
+        text = normalize_video_text(line)
+        if not text or is_noise_line(text):
+            continue
+        for snippet in extract_formula_snippets(text):
+            formula_candidates.append(snippet)
+
+    derived = []
+    if "√9" in topic_text or "9的平方根" in topic_text or "9 的平方根" in topic_text:
+        derived.extend([
+            "平方根：x² = 9 → x = ±3",
+            "算术平方根：√9 = 3",
+            "完整写法：±√9 = ±3",
+        ])
+    if "√16" in topic_text or "16的算术平方根" in topic_text or "16 的算术平方根" in topic_text:
+        derived.append("算术平方根：√16 = 4")
+
+    lines = []
+    seen = set()
+    for item in [*derived, *formula_candidates]:
+        item = compact_sentence_without_ellipsis(item, 28)
+        if not item or not contains_math_notation(item):
+            continue
+        key = enrichment_fingerprint(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(item)
+        if len(lines) >= limit:
+            return lines
+
+    fallback = compact_sentence_without_ellipsis(fallback_title, 18)
+    return [fallback] if fallback else []
+
+
+def formula_example_from_cards(rest, cards, fallback_title):
+    lines = formula_example_lines(rest, cards, fallback_title, limit=3)
+    return "\n".join(lines)
 
 
 def layout_adaptive_problem(slide_data, slide_num, duration, project=None):
@@ -3092,6 +4649,7 @@ def layout_diverse_incident_board(slide_data, slide_num, duration, project=None)
     cards = content_cards_from_lines(rest, limit=4)
     if len(cards) < 2:
         cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:4]
+    cards = augment_teaching_cards(title, rest, cards, limit=4)
     filters = [f"color=c=#0f172a:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
     current = "bg"
     layer_num = 0
@@ -3460,9 +5018,1515 @@ def layout_diverse_subway_roadmap(slide_data, slide_num, duration, project=None)
     return filters, current, layer_num
 
 
+def layout_diverse_blackboard_derivation(slide_data, slide_num, duration, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    cards = content_cards_from_lines(rest, limit=4)
+    if len(cards) < 2:
+        cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:4]
+    filters = [f"color=c=#07140f:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, VIDEO_H), "#07140f", "fill", 0.0)
+    current, layer_num = add_dot_grid(filters, current, layer_num, "#d1fae5", 0.0)
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (72, 72, 1776, 830), "#0f2a1e@0.92", "fill", 0.0)
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (72, 72, 1776, 830), "#84cc16@0.55", 5, 0.0)
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u63a8\u5bfc\u9ed1\u677f", 128, 112, "#84cc16", 0.12)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=128, y=178, width=890, height=128, color="#f7fee7", start=0.24, max_font=58, min_font=38)
+
+    focus = rest[0] if rest else title
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (1080, 145, 610, 190), "#ecfccb@0.10", 36, 0.34)
+    current, layer_num = add_bounded_text(
+        filters, current, layer_num, focus, x=1124, y=190,
+        width=520, height=92, max_font=38, min_font=24, color="#ecfccb", bold=True, start=0.44
+    )
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (1125, 303, 488, 4), "#84cc16@0.80", "fill", 0.58)
+
+    positions = [(130, 390), (590, 355), (1050, 400), (1430, 610)]
+    accents = ["#bef264", "#67e8f9", "#fde68a", "#fca5a5"]
+    for idx, card in enumerate(cards[:4]):
+        x, y = positions[idx]
+        w = 390 if idx < 3 else 310
+        h = 180 if idx < 3 else 170
+        accent = accents[idx % len(accents)]
+        start = start_step(duration, idx, 0.42, 0.08)
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, w, h), "#ffffff@0.06", 28, start)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, f"{idx + 1}", x=x + 28, y=y + 28, font_size=34, color=accent, bold=True, start=start + 0.04)
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, card.get("title", ""), x=x + 76, y=y + 28,
+            width=w - 105, height=58, max_font=25, min_font=18, color="#f8fafc", bold=True, start=start + 0.08
+        )
+        body = concise_body((card.get("subtitle") or "") + " " + (card.get("body") or ""), 58)
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, body, x=x + 28, y=y + 100,
+            width=w - 58, height=h - 118, max_font=20, min_font=15, color="#d1fae5", start=start + 0.16
+        )
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "\u63d0\u793a", x=128, y=828, font_size=24, color="#84cc16", bold=True, start=0.86)
+    note = concise_body(" ".join(rest[1:]), 46) if len(rest) > 1 else "把符号、条件和结论分开看，推导会更清楚。"
+    current, layer_num = add_bounded_text(filters, current, layer_num, note, x=220, y=826, width=1180, height=36, max_font=24, min_font=18, color="#d9f99d", start=0.9)
+    return filters, current, layer_num
+
+
+def layout_diverse_formula_walkthrough(slide_data, slide_num, duration, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    items = formula_walkthrough_cards(title, rest, limit=4)
+    filters = [f"color=c=#f8fafc:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#2563eb")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u5206\u6b65\u8bb2\u89e3", 120, 88, "#2563eb", 0.1)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=120, y=150, width=1120, height=126, color="#07111f", start=0.22, max_font=56, min_font=38)
+    current, layer_num = add_round_panel(filters, current, layer_num, (1280, 128, 460, 260), "#2563eb", "white@0.92", 0.32, radius=42, shadow=True, border=True)
+    example_lines = formula_example_lines(rest, items, title, limit=3)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "\u4f8b\u9898", x=1322, y=170, font_size=22, color="#2563eb", bold=True, start=0.38)
+    for example_idx, example in enumerate(example_lines):
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, example, x=1322, y=216 + example_idx * 52,
+            width=370, height=42, max_font=22, min_font=17, color="#111827",
+            bold=example_idx == 0, start=0.48 + example_idx * 0.06
+        )
+
+    rail_x = 190
+    rail_y = 420
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (rail_x, rail_y + 48, 1480, 18), "#dbeafe", 9, 0.30)
+    count = min(4, max(1, len(items)))
+    gap = 1480 // max(1, count - 1)
+    accents = ["#2563eb", "#10b981", "#f59e0b", "#8b5cf6"]
+    for idx, item in enumerate(items[:count]):
+        cx = rail_x + idx * gap if count > 1 else rail_x + 720
+        start = start_step(duration, idx, 0.44, 0.08)
+        accent = accents[idx % len(accents)]
+        current, layer_num = add_soft_circle_token(filters, current, layer_num, cx, rail_y + 57, 44, accent, f"{idx + 1}", start, fill=accent, text_color="white")
+        card_w = 360 if count >= 4 else 390
+        card_x = max(80, min(VIDEO_W - card_w - 80, cx - card_w // 2))
+        card_y = 530 if idx % 2 == 0 else 665
+        card_h = 188
+        current, layer_num = add_round_panel(filters, current, layer_num, (card_x, card_y, card_w, card_h), accent, "white@0.94", start + 0.04, radius=36, shadow=True, border=True)
+        formula_title = normalize_video_text(item.get("title", ""))
+        formula_body = formula_card_body_summary(formula_title, item.get("body", ""), 42)
+        title_h = 56 if formula_body else 100
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, formula_title, x=card_x + 28, y=card_y + 28,
+            width=card_w - 56, height=title_h, max_font=20, min_font=17,
+            color="#07111f", bold=True, start=start + 0.10
+        )
+        if formula_body:
+            current, layer_num = add_bounded_text(
+                filters, current, layer_num, formula_body, x=card_x + 28, y=card_y + 88,
+                width=card_w - 56, height=78, max_font=16, min_font=15,
+                color="#64748b", start=start + 0.16
+            )
+    return filters, current, layer_num
+
+
+def layout_diverse_checkpoint_ladder(slide_data, slide_num, duration, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    cards = content_cards_from_lines(rest, limit=6)
+    if len(cards) < 3:
+        cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:6]
+    if not cards:
+        cards = [{"title": title or "Checkpoint", "body": ""}]
+
+    filters = [f"color=c=#f6f7fb:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#7c3aed")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u68c0\u67e5\u9636\u68af", 120, 88, "#7c3aed", 0.1)
+    current, layer_num = add_large_title(
+        filters, current, layer_num, title, x=120, y=148, width=1180, height=130,
+        color="#111827", start=0.22, max_font=56, min_font=38
+    )
+
+    summary = "\u5148\u770b\u5206\u7c7b\u6807\u51c6\uff0c\u518d\u628a\u5177\u4f53\u6839\u5f0f\u653e\u56de\u5bf9\u5e94\u7c7b\u578b\u3002"
+    current, layer_num = add_round_panel(filters, current, layer_num, (1350, 112, 420, 198), "#7c3aed", "white@0.93", 0.28, radius=48, shadow=True, border=True)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "\u6293\u4f4f\u5173\u952e", x=1390, y=154, font_size=22, color="#7c3aed", bold=True, start=0.34)
+    current, layer_num = add_bounded_text(filters, current, layer_num, summary, x=1390, y=200, width=340, height=70, max_font=24, min_font=17, color="#334155", start=0.42)
+
+    ladder_x = 180
+    rail_x = 315
+    count = min(4, len(cards))
+    top_y = 340
+    row_gap = 138
+    row_h = 118
+    current, layer_num = add_filter_roundrect(
+        filters, current, layer_num,
+        (rail_x, top_y + 36, 18, row_gap * max(1, count - 1) + row_h - 14),
+        "#ddd6fe", 9, 0.30
+    )
+    accents = ["#7c3aed", "#2563eb", "#0f766e", "#f59e0b", "#ef4444", "#0891b2"]
+    for idx, card in enumerate(cards[:count]):
+        y = top_y + idx * row_gap
+        start = start_step(duration, idx, 0.42, 0.07)
+        accent = accents[idx % len(accents)]
+        current, layer_num = add_soft_circle_token(
+            filters, current, layer_num, rail_x + 9, y + 54, 34,
+            accent, f"{idx + 1}", start, fill="white@0.95"
+        )
+        box_x = ladder_x + (34 if idx % 2 else 0)
+        box_w = 1360 if idx % 2 else 1410
+        panel_x = box_x + 170
+        current, layer_num = add_round_panel(
+            filters, current, layer_num, (panel_x, y, box_w, row_h),
+            accent, "white@0.92", start + 0.04, radius=40, shadow=True, border=True
+        )
+        card_title = normalize_video_text(card.get("title", ""))
+        body = concise_body((card.get("subtitle") or "") + " " + (card.get("body") or ""), 112)
+        text_y = y + 18
+        if body:
+            current, layer_num = add_bounded_text(
+                filters, current, layer_num, card_title, x=panel_x + 44, y=text_y,
+                width=box_w - 88, height=34, max_font=23, min_font=17,
+                color="#111827", bold=True, start=start + 0.10
+            )
+            current, layer_num = add_bounded_text(
+                filters, current, layer_num, body, x=panel_x + 44, y=y + 56,
+                width=box_w - 88, height=46, max_font=18,
+                min_font=14, color="#64748b", start=start + 0.16, safety=0.82
+            )
+        else:
+            current, layer_num = add_bounded_text(
+                filters, current, layer_num, card_title, x=panel_x + 44, y=text_y,
+                width=box_w - 88, height=row_h - 36, max_font=24, min_font=15,
+                color="#111827", bold=True, start=start + 0.10
+            )
+
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (1390, 820, 330, 46), "#ede9fe", 23, 0.78)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "\u56de\u770b -> \u5e94\u7528", x=1460, y=831, font_size=22, color="#6d28d9", bold=True, start=0.84)
+    return filters, current, layer_num
+
+
+def layout_diverse_misconception_compare(slide_data, slide_num, duration, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    groups = comparison_groups_from_lines(rest, limit=2)
+    cards = content_cards_from_lines(rest, limit=4)
+    cards = augment_teaching_cards(title, rest, cards, limit=4)
+    left_title = groups[0]["title"] if groups else "常见误区"
+    right_title = groups[1]["title"] if len(groups) > 1 else "正确理解"
+    left_body = groups[0].get("body", "") if groups else (cards[0].get("body", "") if cards else "")
+    right_body = groups[1].get("body", "") if len(groups) > 1 else (cards[1].get("body", "") if len(cards) > 1 else "")
+    filters = [f"color=c=#fff7ed:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#f97316")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u8bef\u533a\u5bf9\u6bd4", 120, 88, "#f97316", 0.1)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=120, y=150, width=1260, height=126, color="#111827", start=0.22, max_font=56, min_font=38)
+    panels = [((145, 365, 710, 440), "#ef4444", "×", left_title, left_body), ((1065, 365, 710, 440), "#10b981", "✓", right_title, right_body)]
+    for idx, (box, accent, mark, heading, body) in enumerate(panels):
+        x, y, w, h = box
+        start = 0.38 + idx * 0.22
+        current, layer_num = add_round_panel(filters, current, layer_num, box, accent, "white@0.95", start, radius=48, shadow=True, border=True)
+        current, layer_num = add_soft_circle_token(filters, current, layer_num, x + 72, y + 78, 46, accent, mark, start + 0.04, fill=f"{accent}@0.14", text_color=accent)
+        current, layer_num = add_bounded_text(filters, current, layer_num, heading, x=x + 140, y=y + 48, width=w - 190, height=80, max_font=34, min_font=22, color="#111827", bold=True, start=start + 0.10)
+        current, layer_num = add_bounded_text(filters, current, layer_num, concise_body(body, 120), x=x + 54, y=y + 160, width=w - 108, height=190, max_font=25, min_font=18, color="#475569", start=start + 0.18)
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 54, y + 365, w - 108, 20), f"{accent}@0.18", 10, start + 0.26)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (890, 538, 140, 62), "#111827", 31, 0.72)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "修正", x=924, y=554, font_size=28, color="white", bold=True, start=0.78)
+    return filters, current, layer_num
+
+
+def layout_diverse_rounded_step_cards(slide_data, slide_num, duration, project=None):
+    title, cards = diverse_cards(slide_data, slide_num, project, limit=4)
+    filters = [f"color=c=#f8fafc:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#06b6d4")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u5706\u89d2\u8981\u70b9", 120, 88, "#06b6d4", 0.1)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=120, y=150, width=1160, height=126, color="#07111f", start=0.22, max_font=56, min_font=38)
+    positions = [(125, 365, 395, 260), (560, 430, 395, 300), (995, 365, 395, 260), (1430, 430, 330, 300)]
+    accents = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981"]
+    for idx, card in enumerate(cards[:4]):
+        x, y, w, h = positions[idx]
+        accent = accents[idx]
+        start = start_step(duration, idx, 0.40, 0.08)
+        current, layer_num = add_round_panel(filters, current, layer_num, (x, y, w, h), accent, "white@0.88", start, radius=70, shadow=True, border=True)
+        current, layer_num = add_soft_circle_token(filters, current, layer_num, x + 68, y + 70, 42, accent, f"{idx + 1}", start + 0.04, fill=f"{accent}@0.14")
+        current, layer_num = add_bounded_text(filters, current, layer_num, card.get("title", ""), x=x + 124, y=y + 44, width=w - 160, height=72, max_font=27, min_font=19, color="#07111f", bold=True, start=start + 0.10)
+        body = concise_body((card.get("subtitle") or "") + " " + (card.get("body") or ""), 82)
+        current, layer_num = add_bounded_text(filters, current, layer_num, body, x=x + 42, y=y + 145, width=w - 84, height=h - 178, max_font=21, min_font=16, color="#475569", start=start + 0.16)
+    return filters, current, layer_num
+
+
+def layout_diverse_radical_division_rule(slide_data, slide_num, duration, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    lines = [normalize_video_text(line) for line in rest if normalize_video_text(line) and not is_noise_line(line)]
+    formula = next((line for line in lines if "√a" in line and "√b" in line), "√a ÷ √b = √(a÷b)")
+    examples = []
+    for line in lines:
+        if "举例" in line and contains_math_notation(line):
+            examples.append(re.sub(r"^举例[:：]\s*", "", line))
+        elif "√12" in line and "√3" in line:
+            examples.append("√12 ÷ √3 = √(12÷3) = √4 = 2")
+        elif "√8" in line and "√2" in line:
+            examples.append("√8 ÷ √2 = √4 = 2")
+    if not examples:
+        examples = ["√8 ÷ √2 = √(8÷2) = √4 = 2", "√12 ÷ √3 = √(12÷3) = √4 = 2"]
+    examples = list(dict.fromkeys(examples))[:2]
+
+    filters = [f"color=c=#eef2ff:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#6366f1")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u8fd0\u7b97\u6cd5\u5219", 120, 88, "#6366f1", 0.1)
+    current, layer_num = add_large_title(
+        filters, current, layer_num, title, x=120, y=145, width=780, height=118,
+        color="#111827", start=0.22, max_font=56, min_font=38
+    )
+
+    current, layer_num = add_round_panel(filters, current, layer_num, (610, 138, 1120, 210), "#6366f1", "white@0.94", 0.30, radius=52, shadow=True, border=True)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "\u6838\u5fc3\u516c\u5f0f", x=660, y=178, font_size=24, color="#6366f1", bold=True, start=0.38)
+    current, layer_num = add_bounded_text(
+        filters, current, layer_num, formula, x=660, y=225, width=650, height=70,
+        max_font=40, min_font=28, color="#111827", bold=True, start=0.48
+    )
+    current, layer_num = add_bounded_text(
+        filters, current, layer_num, "适用前提：a ≥ 0，b > 0，分母不能为 0。",
+        x=1320, y=222, width=360, height=78, max_font=24, min_font=18,
+        color="#475569", start=0.58
+    )
+
+    cards = [
+        {
+            "box": (145, 390, 430, 390),
+            "accent": "#3b82f6",
+            "label": "01",
+            "title": "分母有理化",
+            "body": "分母含根号时，分子分母同乘对应根式，例如 1/√2 = √2/2。",
+        },
+        {
+            "box": (640, 430, 500, 310),
+            "accent": "#10b981",
+            "label": "02",
+            "title": "三步化简",
+            "body": "先合并根号，再计算被开方数，最后开方或继续化简。",
+        },
+        {
+            "box": (1205, 430, 500, 310),
+            "accent": "#f59e0b",
+            "label": "03",
+            "title": "先看条件",
+            "body": "被开方数要非负；除数对应的根式不能等于 0。",
+        },
+    ]
+    for idx, card in enumerate(cards):
+        x, y, w, h = card["box"]
+        accent = card["accent"]
+        start = start_step(duration, idx, 0.46, 0.08)
+        current, layer_num = add_round_panel(filters, current, layer_num, card["box"], accent, "white@0.92", start, radius=48, shadow=True, border=True)
+        current, layer_num = add_soft_circle_token(filters, current, layer_num, x + 66, y + 70, 40, accent, card["label"], start + 0.04, fill=f"{accent}@0.13", text_color=accent)
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, card["title"], x=x + 124, y=y + 42,
+            width=w - 165, height=62, max_font=28, min_font=20,
+            color="#111827", bold=True, start=start + 0.10
+        )
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, card["body"], x=x + 42, y=y + 138,
+            width=w - 84, height=h - 172, max_font=22, min_font=16,
+            color="#475569", start=start + 0.16
+        )
+
+    current, layer_num = add_round_panel(filters, current, layer_num, (640, 790, 1065, 135), "#8b5cf6", "white@0.92", 0.78, radius=46, shadow=True, border=True)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "\u4f8b\u9898\u6f14\u793a", x=690, y=826, font_size=24, color="#7c3aed", bold=True, start=0.84)
+    for idx, example in enumerate(examples):
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, example, x=855, y=814 + idx * 50,
+            width=790, height=42, max_font=26, min_font=19,
+            color="#111827", bold=idx == 0, start=0.90 + idx * 0.06
+        )
+    return filters, current, layer_num
+
+
+def layout_diverse_radial_concept_map(slide_data, slide_num, duration, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    if is_radical_division_rule(title, rest):
+        return layout_diverse_radical_division_rule(slide_data, slide_num, duration, project)
+    cards = content_cards_from_lines(rest, limit=5)
+    if len(cards) < 3:
+        cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:5]
+    cards = augment_teaching_cards(title, rest, cards, limit=5)
+    filters = [f"color=c=#eef2ff:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#6366f1")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u77e5\u8bc6\u5730\u56fe", 120, 88, "#6366f1", 0.1)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=120, y=145, width=1000, height=118, color="#111827", start=0.22, max_font=56, min_font=38)
+    cx, cy = 960, 600
+    positions = [(330, 405), (795, 205), (1245, 330), (1305, 735), (500, 760)]
+    accents = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"]
+    card_boxes = [(x, y, 330, 138) for x, y in positions[:len(cards[:5])]]
+    for idx, box in enumerate(card_boxes):
+        accent = accents[idx % len(accents)]
+        start = start_step(duration, idx, 0.46, 0.07)
+        x1, y1, x2, y2 = radial_connector_points(cx, cy, 154, box, gap=-8)
+        current, layer_num = add_filter_elbow_connector(
+            filters, current, layer_num, x1, y1, x2, y2, f"{accent}@0.32", thickness=7, start=start
+        )
+    current, layer_num = add_filter_circle(filters, current, layer_num, cx, cy, 158, "#6366f1@0.16", 0.24)
+    current, layer_num = add_filter_circle(filters, current, layer_num, cx, cy, 106, "#6366f1", 0.34)
+    current, layer_num = add_bounded_text(filters, current, layer_num, concise_body(title, 12), x=cx - 78, y=cy - 34, width=156, height=70, max_font=30, min_font=20, color="white", bold=True, start=0.46)
+    for idx, card in enumerate(cards[:5]):
+        x, y, w, h = card_boxes[idx]
+        accent = accents[idx]
+        start = start_step(duration, idx, 0.48, 0.07)
+        current, layer_num = add_round_panel(filters, current, layer_num, (x, y, w, h), accent, "white@0.92", start, radius=54, shadow=True, border=True)
+        current, layer_num = add_bounded_text(filters, current, layer_num, card.get("title", ""), x=x + 38, y=y + 34, width=w - 76, height=66, max_font=24, min_font=17, color="#111827", bold=True, start=start + 0.08)
+    return filters, current, layer_num
+
+
+def layout_diverse_application_storyboard(slide_data, slide_num, duration, project=None):
+    title, cards = diverse_cards(slide_data, slide_num, project, limit=4)
+    filters = [f"color=c=#f8fafc:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    current, layer_num = add_diverse_light_canvas(filters, current, layer_num, project, slide_num, slide_data, "#0f766e")
+    current, layer_num = add_micro_label(filters, current, layer_num, "\u573a\u666f\u5206\u955c", 120, 88, "#0f766e", 0.1)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=120, y=150, width=1160, height=126, color="#07111f", start=0.22, max_font=56, min_font=38)
+    positions = [(120, 360), (555, 360), (990, 360), (1425, 360)]
+    accents = ["#0f766e", "#2563eb", "#f59e0b", "#8b5cf6"]
+    for idx, card in enumerate(cards[:4]):
+        x, y = positions[idx]
+        start = start_step(duration, idx, 0.42, 0.08)
+        accent = accents[idx]
+        current, layer_num = add_round_panel(filters, current, layer_num, (x, y, 360, 420), accent, "white@0.94", start, radius=42, shadow=True, border=True)
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 34, y + 34, 292, 150), f"{accent}@0.12", 34, start + 0.04)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, f"\u573a\u666f {idx + 1}", x=x + 58, y=y + 80, font_size=24, color=accent, bold=True, start=start + 0.08)
+        current, layer_num = add_bounded_text(filters, current, layer_num, card.get("title", ""), x=x + 36, y=y + 220, width=286, height=76, max_font=25, min_font=18, color="#07111f", bold=True, start=start + 0.14)
+        current, layer_num = add_bounded_text(filters, current, layer_num, concise_body(card.get("body", ""), 58), x=x + 36, y=y + 312, width=286, height=62, max_font=19, min_font=15, color="#475569", start=start + 0.20)
+    return filters, current, layer_num
+
+
+def collect_micro_course_examples(title, rest, cards, limit=3):
+    examples = []
+    for line in rest:
+        line = normalize_video_text(line)
+        if not line:
+            continue
+        if is_example_heading(line):
+            examples.append(re.sub(r"^[^：:]{1,8}[：:]\s*", "", line))
+        elif ("例" in line or "如" in line) and contains_math_notation(line):
+            snippets = extract_formula_snippets(line)
+            examples.extend(snippets or [compact_sentence_without_ellipsis(line, 34)])
+    for card in cards:
+        body = normalize_video_text(card.get("body", ""))
+        if "例：" in body:
+            examples.append(body.split("例：", 1)[1])
+        elif is_example_heading(card.get("title", "")):
+            examples.append(normalize_video_text(" ".join(part for part in (card.get("subtitle", ""), body) if part)))
+    examples.extend(formula_example_lines(rest, cards, title, limit=limit))
+
+    deduped = []
+    seen = set()
+    for example in examples:
+        example = compact_sentence_without_ellipsis(example, 42)
+        key = enrichment_fingerprint(example)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(example)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def micro_course_main_formula(title, rest, cards):
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    clean_title = normalize_video_text(title)
+    if clean_title == "目录":
+        return ""
+    if any(keyword in combined for keyword in ("摩擦力", "摩擦", "滑动摩擦", "静摩擦", "正压力", "粗糙")):
+        if any(keyword in combined for keyword in ("静摩擦", "最大静摩擦", "取值范围")):
+            return "0 ≤ fs ≤ μsN"
+        if any(keyword in combined for keyword in ("公式", "计算", "μ", "正压力", "滑动摩擦")):
+            return "F = μN"
+        if any(keyword in combined for keyword in ("方向", "相对运动趋势")):
+            return "f 与相对运动趋势相反"
+        if any(keyword in combined for keyword in ("条件", "产生")):
+            return "接触 + 挤压 + 相对运动趋势"
+    if "知识全解析" in combined:
+        return "√a；a ≥ 0"
+    if "基础概念" in combined:
+        return "√a；a ≥ 0"
+    if "根号的定义" in combined:
+        return "x² = a → x = √a"
+    if "根号的分类" in combined or ("算术平方根" in combined and "平方根" in combined):
+        return "√9 = 3；x² = 9 → x = ±3"
+    if "运算技巧" in combined:
+        return "条件 → 化简 → 合并 → 验算"
+    if "化简" in combined and "√72" in combined:
+        return "√72 = √(36×2) = 6√2"
+    if "乘法法则" in combined and "√a" in combined and "√b" in combined:
+        return "√a × √b = √(a×b)"
+    if "除法法则" in combined and "√a" in combined and "√b" in combined:
+        return "√a ÷ √b = √(a÷b)"
+    if "加减法" in combined and ("同类根式" in combined or "2√3" in combined):
+        return "m√a ± n√a = (m±n)√a"
+    if "方程" in combined:
+        if "√(x + 2) = x" in combined or "√(x+2)=x" in combined:
+            return "√(x+2)=x → x=2"
+        if "√(2x" in combined:
+            return "√(2x + 1) = 3"
+        return "定义域 → 平方 → 求解 → 验根"
+    if "不等式" in combined:
+        if "√(x+1)" in combined or "√(x + 1)" in combined:
+            return "√(x+1) > 2 → x > 3"
+        return "定义域 ∩ 平方后的解集"
+    if "函数" in combined:
+        if "√(x-2)" in combined or "√(x - 2)" in combined or "y=√" in combined:
+            return "y = √(x - 2), x ≥ 2"
+        return "根式函数：根号内 ≥ 0，函数值 ≥ 0"
+    if "无理数" in combined:
+        return "非完全平方数开方：√2、√3 为无理数"
+    if "进阶知识" in combined:
+        return "定义域 → 变形 → 验根 / 取交集"
+    if "根号的性质" in combined or "性质" in combined:
+        return "a ≥ 0；√a ≥ 0；√(x²)=|x|"
+    if "应用场景" in combined:
+        return "已知 x² = a → 开方反求 x"
+    if "平方根" in combined:
+        return "x² = a → x = ±√a；√a ≥ 0"
+    preferred = []
+    fallback = []
+    for line in rest:
+        line = normalize_video_text(line)
+        if not line or not contains_math_notation(line):
+            continue
+        snippets = extract_formula_snippets(line) or ([line] if visual_text_len(line) <= 48 else [])
+        if any(keyword in line for keyword in ("公式", "法则", "定义", "规律", "性质", "写作", "表示")):
+            preferred.extend(snippets)
+        else:
+            fallback.extend(snippets)
+    for card in cards:
+        heading = normalize_video_text(card.get("title", ""))
+        body = normalize_video_text(card.get("body", ""))
+        snippets = extract_formula_snippets(body)
+        if contains_math_notation(heading) and any(keyword in heading for keyword in ("公式", "法则", "定义", "规律", "性质")):
+            preferred.append(heading)
+        if any(keyword in heading + body for keyword in ("公式", "法则", "定义", "规律", "性质", "写作", "表示")):
+            preferred.extend(snippets)
+        else:
+            fallback.extend(snippets)
+    seen = set()
+    for item in [*preferred, *fallback]:
+        item = compact_sentence_without_ellipsis(item, 34)
+        if not item or not contains_math_notation(item):
+            continue
+        key = enrichment_fingerprint(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        return item
+    return ""
+
+
+def micro_course_topic_kind(title, rest, cards, project=None, slide_num=0):
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    has_image = micro_course_visual_asset(project, slide_num, title=title, rest=rest) is not None
+    formula = micro_course_main_formula(title, rest, cards)
+    if slide_num == 1:
+        return "opener"
+    real_example = any(keyword in combined for keyword in ("举例", "例题", "计算", "求解", "化简", "方程", "不等式"))
+    if any(keyword in combined for keyword in ("目录", "感谢观看")):
+        return "concept"
+    if any(keyword in combined for keyword in ("性质", "分类", "概念", "进阶知识", "无理数")):
+        return "formula"
+    if any(keyword in combined for keyword in ("情境", "应用", "观察", "探究", "生活", "案例", "场景", "几何", "物理", "金融")):
+        return "case"
+    if real_example and any(keyword in combined for keyword in ("计算", "求解", "化简", "方程", "不等式")):
+        return "example"
+    if formula or any(keyword in combined for keyword in ("公式", "法则", "定义", "性质", "规律", "根号", "平方根")):
+        return "formula"
+    if has_image:
+        return "case"
+    return "concept"
+
+
+def add_micro_course_header(filters, current, layer_num, title, subtitle, start=0.12):
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, 10), "#1d4ed8", "fill", 0.0)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (42, 34, 212, 66), "#1d4ed8", 16, start)
+    current, layer_num = add_soft_circle_token(filters, current, layer_num, 82, 67, 22, "#ffffff", ">", start + 0.03, fill="white@0.96", text_color="#1d4ed8")
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "微课", x=126, y=50, font_size=30, color="white", bold=True, start=start + 0.06)
+    current, layer_num = add_micro_course_bulb(filters, current, layer_num, 1680, 32, start + 0.04)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=365, y=30, width=1180, height=82, color="#08215c", start=start + 0.06, max_font=58, min_font=34)
+    if subtitle:
+        current, layer_num = add_bounded_text(filters, current, layer_num, subtitle, x=520, y=120, width=880, height=36, max_font=26, min_font=18, color="#172554", start=start + 0.14)
+    return current, layer_num
+
+
+def micro_course_specific_points(title, rest, limit=4):
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    clean_title = normalize_video_text(title)
+    if clean_title == "目录":
+        points = [
+            "第一层：根号是什么，先分清定义和性质",
+            "第二层：根号怎么算，重点练乘除加减和化简",
+            "第三层：根号怎么用，放到函数、方程和不等式里",
+            "学习顺序：概念 → 运算 → 应用",
+        ]
+    elif "知识全解析" in combined:
+        points = [
+            "先懂符号：根号表示算术平方根",
+            "再懂条件：被开方数必须非负",
+            "会算例题：乘除加减都先化简",
+            "能迁移：函数、方程、不等式都要保留定义域",
+        ]
+    elif "基础概念" in combined:
+        points = [
+            "含义：表示算术平方根",
+            "条件：实数范围内被开方数非负",
+            "结果：根号结果只取非负值",
+            "区别：平方根才包含正负两类",
+        ]
+    elif "根号的定义" in combined:
+        points = [
+            "找数：先设一个平方关系",
+            "取值：根号默认取非负的那个数",
+            "例子：根号九等于三，不是正负三",
+            "完整平方根：九的平方根是正负三",
+        ]
+    elif "根号的性质" in combined:
+        points = [
+            "有意义：被开方数 a ≥ 0",
+            "结果范围：√a ≥ 0",
+            "平方还原：(√a)² = a",
+            "开平方：√(x²)=|x|",
+        ]
+    elif "根号的分类" in combined:
+        points = [
+            "算术平方根：只取非负结果",
+            "平方根：通常对应正负两个结果",
+            "立方根：结果可以为负",
+            "判断：先看根指数，再看结果个数",
+        ]
+    elif "运算技巧" in combined:
+        points = [
+            "先看条件：根号内必须有意义",
+            "再拆因子：优先找完全平方数",
+            "合并同类：根号内相同才能加减",
+            "最后验算：平方或代回原式检查",
+        ]
+    elif "乘法法则" in combined:
+        points = [
+            "条件：a ≥ 0，b ≥ 0",
+            "合并：√a × √b = √(a×b)",
+            "例子：√2 × √3 = √6",
+            "检验：√4×√9 与 √36 都等于 6",
+        ]
+    elif "除法法则" in combined:
+        points = [
+            "条件：a ≥ 0，b > 0",
+            "合并：√a ÷ √b = √(a÷b)",
+            "例子：√8 ÷ √2 = √4 = 2",
+            "分母有根号时要有理化",
+        ]
+    elif "加减法" in combined:
+        points = [
+            "先化简：把 √8 化成 2√2",
+            "再判断：根号内相同才是同类根式",
+            "合并：只合并系数，根式不变",
+            "例子：2√3 + 5√3 = 7√3",
+        ]
+    elif "化简" in combined:
+        points = [
+            "分解：把被开方数拆出完全平方因子",
+            "提取：√36 可以提出为 6",
+            "保留：剩下不能开尽方的因子留在根号内",
+            "例子：√72 = 6√2",
+        ]
+    elif "进阶知识" in combined:
+        points = [
+            "定义域：根号内表达式必须 ≥ 0",
+            "变形：平方前先确认两边条件",
+            "验根：方程平方后必须代回",
+            "取交集：不等式结果要和定义域合并",
+        ]
+    elif "无理数" in combined:
+        points = [
+            "完全平方数：开方后可得到整数",
+            "非完全平方数：如 √2、√3",
+            "无理数特征：无限不循环小数",
+            "判断：不能化成两个整数之比",
+        ]
+    elif "应用场景" in combined:
+        points = [
+            "几何：由面积或勾股关系反求边长",
+            "物理：由平方关系反求速度或距离",
+            "金融：由增长倍数反推平均变化率",
+            "关键：先识别哪个量被平方了",
+        ]
+    elif "函数" in combined:
+        points = [
+            "定义域：根号内表达式 ≥ 0",
+            "值域：算术平方根结果 ≥ 0",
+            "图像：从端点开始向右上延伸",
+            "例子：y=√(x-2) 要求 x≥2",
+        ]
+    elif "方程" in combined:
+        points = [
+            "先定条件：根号内 ≥ 0",
+            "再平方：消去根号",
+            "后求解：得到候选解",
+            "必须验根：防止平方引入增根",
+        ]
+    elif "不等式" in combined:
+        points = [
+            "先写定义域：根号内 ≥ 0",
+            "两边非负时再平方",
+            "解出范围后与定义域取交集",
+            "例子：√(x+1)>2 → x>3",
+        ]
+    else:
+        points = []
+    return points[:limit]
+
+
+def micro_course_core_points(title, rest, cards, limit=3):
+    specific = micro_course_specific_points(title, rest, limit)
+    if specific:
+        return specific
+    points = []
+    for card in cards:
+        item = compact_sentence_without_ellipsis(card.get("title") or card.get("body") or "", 24)
+        if item:
+            points.append(item)
+    if len(points) < limit:
+        for line in rest:
+            line = compact_sentence_without_ellipsis(line, 28)
+            if line and not any(enrichment_fingerprint(line) == enrichment_fingerprint(item) for item in points):
+                points.append(line)
+            if len(points) >= limit:
+                break
+    if not points:
+        points = ["先抓关键词", "再看限制条件", "最后用例子检验"]
+    return points[:limit]
+
+
+def micro_course_specific_lead(title, rest):
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    clean_title = normalize_video_text(title)
+    if clean_title == "目录":
+        return "这节课按一条线讲：先把根号看懂，再把根式算准，最后放进题目里使用。"
+    if "知识全解析" in combined:
+        return "根号的学习主线是：先理解定义与条件，再掌握运算规则，最后迁移到函数、方程和不等式。"
+    if "基础概念" in combined:
+        return "这一页先讲清楚三件事：根号表示什么，什么时候有意义，以及它和“平方根”有什么区别。"
+    if "根号的定义" in combined:
+        return "根号不是随便套符号，它来自“哪个非负数平方后等于 a”这个问题。"
+    if "根号的性质" in combined:
+        return "性质页重点看两个方向：根号下能不能成立，以及开方后的结果范围。"
+    if "根号的分类" in combined:
+        return "分类不是背名字，而是区分结果个数：算术平方根一个，平方根通常两个。"
+    if "运算技巧" in combined:
+        return "运算题不要急着算，先检查条件，再化简，再合并，最后回到原式验算。"
+    if "进阶知识" in combined:
+        return "进阶题的重点不是公式更多，而是每次变形都不能丢掉定义域和验根。"
+    if "无理数" in combined:
+        return "不是所有根号都能开成整数；开不尽的根式往往对应无限不循环小数。"
+    if "乘法法则" in combined:
+        return "两个根式相乘时，可以合并进一个根号，但前提是被开方数都非负。"
+    if "除法法则" in combined:
+        return "除法多一个限制：分母里的根式不能为 0，也就是 b > 0。"
+    if "加减法" in combined:
+        return "根式加减的核心不是把根号内相加，而是先化成同类根式再合并系数。"
+    if "化简" in combined:
+        return "化简根式就是把根号里能开尽方的部分提出来，让结果更短、更标准。"
+    if "应用场景" in combined:
+        return "应用题里出现根号，通常是因为题目已知平方关系，需要反求原来的量。"
+    if "不等式" in combined:
+        return "根号不等式要先写定义域，再判断两边能否平方，最后把解集和定义域取交集。"
+    if "函数" in combined:
+        return "根式函数先由根号内确定定义域，再由算术平方根确定值域和图像起点。"
+    if "方程" in combined:
+        return "先平方得到候选解，再把 -1 和 2 代回原方程验根。"
+    return ""
+
+
+def micro_course_formula_lead_text(ctx):
+    lead = normalize_video_text(ctx.get("lead", ""))
+    title = normalize_video_text(ctx.get("title", ""))
+    combined = " ".join([title, lead, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if "不等式" in combined:
+        return "先确定定义域和可平方条件，再变形求范围，最后与定义域合并。"
+    if "函数" in combined:
+        return "先看根号内表达式的非负条件，再判断函数值范围和图像起点。"
+    if "方程" in combined:
+        return "平方只得到候选解，必须代回原方程检验，排除增根。"
+    if contains_math_notation(lead) or contains_display_formula(lead):
+        return "先把符号、条件和结论分开，再选择对应的变形方法。"
+    return lead
+
+
+def micro_course_explain_line(title, rest, cards, limit=68):
+    specific = micro_course_specific_lead(title, rest)
+    if specific:
+        return compact_sentence_without_ellipsis(specific, limit)
+    candidates = []
+    for card in cards:
+        text = normalize_video_text(card.get("body", "") or card.get("subtitle", ""))
+        if text and visual_text_len(text) >= 8:
+            candidates.append(text)
+    candidates.extend(normalize_video_text(line) for line in rest if normalize_video_text(line))
+    if not candidates:
+        return "把本页内容拆成概念、条件和应用三个层次来看。"
+    return compact_sentence_without_ellipsis(candidates[0], limit)
+
+
+def micro_course_teaching_steps(title, rest, cards, formula="", limit=3):
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    clean_title = normalize_video_text(title)
+    if clean_title == "目录":
+        steps = [
+            "先学概念：知道 √a 的含义和取值范围。",
+            "再练运算：把乘除加减都落到化简规则上。",
+            "最后进阶：把定义域带入函数、方程和不等式。",
+        ]
+    elif any(keyword in combined for keyword in ("摩擦", "静摩擦", "滑动摩擦", "滚动摩擦", "正压力", "粗糙")):
+        if any(keyword in combined for keyword in ("公式", "计算", "μ", "正压力")):
+            steps = [
+                "确定类型：滑动摩擦用 F = μN。",
+                "找准参数：μ 看接触面，N 看正压力。",
+                "检查静摩擦：静止时先看 0 ≤ fs ≤ μsN。",
+            ]
+        elif any(keyword in combined for keyword in ("方向", "相对运动趋势")):
+            steps = [
+                "先判断物体相对接触面的运动趋势。",
+                "摩擦力方向与相对运动或趋势相反。",
+                "再结合受力平衡或运动状态验证。",
+            ]
+        elif any(keyword in combined for keyword in ("实验", "测力计", "数据")):
+            steps = [
+                "匀速拉动木块，让拉力与滑动摩擦力平衡。",
+                "改变正压力或粗糙程度，只变一个条件。",
+                "记录多组数据，再比较摩擦力变化。",
+            ]
+        else:
+            steps = [
+                "产生条件：接触、挤压、接触面不够光滑。",
+                "判断方向：阻碍相对运动或相对运动趋势。",
+                "实际应用：按需要增大有益摩擦或减小有害摩擦。",
+            ]
+    elif "知识全解析" in combined:
+        steps = [
+            "问题 1：√a 到底表示哪个数？",
+            "问题 2：根号下为什么不能随便放负数？",
+            "问题 3：遇到题目时怎样列式、化简、验算？",
+        ]
+    elif "根号的定义" in combined:
+        steps = [
+            "先设问题：求九的平方根，就是找平方后等于九的数。",
+            "再分符号：根号九只表示算术平方根，不含负根。",
+            "写完整答案：九的平方根是正负三。",
+        ]
+    elif "基础概念" in combined:
+        steps = [
+            "先看对象：根号表示对被开方数开平方。",
+            "再看条件：在实数范围内，被开方数必须非负。",
+            "最后区分：算术平方根只取非负，平方根才写正负。",
+        ]
+    elif "根号的性质" in combined:
+        steps = [
+            "定义域：先保证根号内表达式非负。",
+            "结果范围：算术平方根不能取负值。",
+            "逆运算：平方和开方要注意绝对值。",
+        ]
+    elif "根号的分类" in combined:
+        steps = [
+            "算术平方根：只取非负结果。",
+            "平方根：解平方关系时通常有正负两个结果。",
+            "更高次根：立方根可以为负。",
+        ]
+    elif "运算技巧" in combined:
+        steps = [
+            "先判条件：根号内的数或式子要有意义。",
+            "再做化简：优先拆出完全平方因子。",
+            "最后运算：同类根式合并，并代回检验。",
+        ]
+    elif "乘法法则" in combined:
+        steps = [
+            "确认条件：两个被开方数都非负。",
+            "合并根号：先合成一个根式。",
+            "代入检验：用具体数字检查等式。",
+        ]
+    elif "除法法则" in combined:
+        steps = [
+            "确认条件：分母根式不能为 0。",
+            "合并根号：先写成一个商的根式。",
+            "遇到分母根号：再做有理化。",
+        ]
+    elif "加减法" in combined:
+        steps = [
+            "先化简：√8 变成 2√2。",
+            "找同类：根号内相同才能加减。",
+            "合并系数：2√3+5√3=7√3。",
+        ]
+    elif "化简" in combined:
+        steps = [
+            "分解被开方数：72=36×2。",
+            "提出完全平方因子：√36=6。",
+            "得到最简根式：√72=6√2。",
+        ]
+    elif "进阶知识" in combined:
+        steps = [
+            "先写定义域，明确根号内必须非负。",
+            "再做等价变形，平方时看两边是否非负。",
+            "最后回到原题验根或与定义域取交集。",
+        ]
+    elif "无理数" in combined:
+        steps = [
+            "先看被开方数是不是完全平方数。",
+            "开不尽时，如 √2、√3，通常是无理数。",
+            "无理数的小数展开无限且不循环。",
+        ]
+    elif "方程" in combined:
+        steps = [
+            "先写限制：根号内表达式 ≥ 0。",
+            "两边平方：把根式方程转为普通方程。",
+            "代回验根：排除平方带来的增根。",
+        ]
+    elif "不等式" in combined:
+        steps = [
+            "先定定义域：x+1 ≥ 0。",
+            "两边非负时平方：得到 x+1>4。",
+            "合并范围：x>3 已满足定义域。",
+        ]
+    elif "函数" in combined:
+        steps = [
+            "先看根号内：x-2 ≥ 0。",
+            "得到定义域：x ≥ 2。",
+            "再看输出：y=√(x-2) 一定 ≥ 0。",
+        ]
+    else:
+        steps = []
+
+    if not steps:
+        for card in cards:
+            text = normalize_video_text(card.get("body") or card.get("title") or "")
+            if text and visual_text_len(text) >= 6:
+                steps.append(compact_sentence_without_ellipsis(text, 38))
+            if len(steps) >= limit:
+                break
+    if len(steps) < limit:
+        steps.extend(["先看条件是否成立", "再把文字翻译成符号", "最后代入数字检验"][: limit - len(steps)])
+    return steps[:limit]
+
+
+def micro_course_check_example(title, rest, formula="", examples=None):
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    clean_title = normalize_video_text(title)
+    if clean_title == "目录":
+        return "概念先行，运算跟上，最后用函数、方程、不等式检验理解"
+    if "基础概念" in combined:
+        return "算术平方根只取非负；平方根要考虑正负"
+    if "根号的定义" in combined:
+        return "三的平方是九，所以根号九等于三"
+    if "根号的性质" in combined:
+        return "正数可以开平方；负数在实数范围内不能直接开平方"
+    if "根号的分类" in combined:
+        return "算术平方根只取一个；平方根要写正负两个"
+    if "运算技巧" in combined:
+        return "√72=√(36×2)=6√2，先拆完全平方因子"
+    if "应用场景" in combined:
+        return "面积 9 → 边长 √9=3；斜边 c=√(a²+b²)"
+    if "乘法法则" in combined:
+        return "√4×√9=2×3=6，√(4×9)=√36=6"
+    if "除法法则" in combined:
+        return "√8÷√2=√4=2，条件 b>0"
+    if "加减法" in combined:
+        return "√8+√2=2√2+√2=3√2"
+    if "化简" in combined:
+        return "72=36×2，所以 √72=6√2"
+    if "进阶知识" in combined:
+        return "含根号题先写定义域，变形后必须验根或取交集"
+    if "无理数" in combined:
+        return "√2、√3 开不尽，结果是无限不循环小数"
+    if "函数" in combined:
+        return "y=√(x-2) 要求 x≥2"
+    if "方程" in combined:
+        if "√(x + 2) = x" in combined or "√(x+2)=x" in combined:
+            return "二代回成立，负一舍去"
+        return "先求候选解，再代回原方程验根"
+    if "不等式" in combined:
+        return "√(x+1)>2 → x+1>4 → x>3"
+    if examples:
+        for example in examples:
+            example = compact_sentence_without_ellipsis(example, 42)
+            if example:
+                return example
+    return compact_sentence_without_ellipsis(formula or "代入具体数字检查条件和结果。", 42)
+
+
+def micro_course_build_context(slide_data, slide_num, project=None):
+    title, rest = slide_context(slide_data, slide_num, project)
+    cards = content_cards_from_lines(rest, limit=5)
+    if len(cards) < 2:
+        cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:5]
+    cards = merge_example_cards(cards, limit=5)
+    cards = augment_teaching_cards(title, rest, cards, limit=5)
+    examples = collect_micro_course_examples(title, rest, cards, limit=3)
+    formula = micro_course_main_formula(title, rest, cards)
+    points = micro_course_core_points(title, rest, cards, limit=4)
+    steps = micro_course_teaching_steps(title, rest, cards, formula, limit=3)
+    check = micro_course_check_example(title, rest, formula, examples)
+    lead = micro_course_explain_line(title, rest, cards, limit=74)
+    kind = micro_course_topic_kind(title, rest, cards, project, slide_num)
+    visual_asset = micro_course_visual_asset(project, slide_num, slide_data, title, rest)
+    return {
+        "title": title or project_display_title(project),
+        "rest": rest,
+        "cards": cards,
+        "examples": examples,
+        "formula": formula,
+        "points": points,
+        "steps": steps,
+        "check": check,
+        "lead": lead,
+        "kind": kind,
+        "visual_asset": visual_asset,
+    }
+
+
+def micro_course_panel(filters, current, layer_num, box, accent, title, body_lines, start=0.34, fill="white@0.94", radius=28, icon_label=""):
+    x, y, w, h = box
+    current, layer_num = add_round_panel(filters, current, layer_num, box, accent, fill, start, radius=radius, shadow=True, border=False)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 8, h), accent, 4, start + 0.03)
+    if icon_label:
+        current, layer_num = add_soft_circle_token(filters, current, layer_num, x + 52, y + 50, 26, accent, icon_label, start + 0.08, fill=f"{accent}@0.14", text_color=accent)
+        title_x = x + 92
+    else:
+        title_x = x + 36
+    current, layer_num = add_bounded_text(
+        filters, current, layer_num, title, x=title_x, y=y + 28,
+        width=w - (title_x - x) - 28, height=42, max_font=26, min_font=20,
+        color=accent, bold=True, start=start + 0.10
+    )
+    text_y = y + 88
+    for idx, line in enumerate(body_lines[:4]):
+        line = normalize_video_text(line)
+        if not line:
+            continue
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, line, x=x + 38, y=text_y + idx * 44,
+            width=w - 76, height=38, max_font=24, min_font=17,
+            color="#111827", bold=False, start=start + 0.16 + idx * 0.05
+        )
+    return current, layer_num
+
+
+def add_micro_course_bulb(filters, current, layer_num, x, y, start=0.28):
+    current, layer_num = add_filter_circle(filters, current, layer_num, x + 48, y + 44, 38, "#facc15@0.92", start)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 31, y + 78, 34, 20), "#2563eb", 7, start + 0.06)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 34, y + 96, 28, 9), "#1d4ed8", 4, start + 0.08)
+    for dx, dy, w, h in [(-18, 42, 18, 5), (96, 42, 18, 5), (47, -12, 5, 18), (7, 9, 15, 5), (78, 9, 15, 5)]:
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + dx, y + dy, w, h), "#facc15@0.80", 3, start + 0.10)
+    return current, layer_num
+
+
+def micro_course_canvas(duration, project=None, slide_num=0, slide_data=None):
+    filters = [f"color=c=#eef7ff:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    current = "bg"
+    layer_num = 0
+    if micro_course_visual_asset(project, slide_num, slide_data):
+        current, layer_num = add_filter_visual_cover(filters, current, layer_num, box=(0, 0, VIDEO_W, VIDEO_H), opacity=0.10, start=0.0)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, VIDEO_H), "white@0.84", "fill", 0.0)
+    current, layer_num = add_filter_circle(filters, current, layer_num, 1730, 200, 145, "#bfdbfe@0.30", 0.0)
+    current, layer_num = add_filter_circle(filters, current, layer_num, 205, 910, 120, "#bbf7d0@0.22", 0.0)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (0, 0, VIDEO_W, 10), "#1d4ed8", 0, 0.0)
+    return filters, current, layer_num
+
+
+def add_micro_course_point_stack(filters, current, layer_num, points, *, x, y, width, accent="#1d70c9", start=0.58):
+    for idx, point in enumerate(points[:4]):
+        row_y = y + idx * 78
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, row_y, width, 58), "white@0.78", 22, start + idx * 0.08)
+        current, layer_num = add_filter_circle(filters, current, layer_num, x + 32, row_y + 29, 18, f"{accent}@0.20", start + idx * 0.08)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=x + 24, y=row_y + 14, font_size=21, color=accent, bold=True, start=start + idx * 0.08)
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, point, x=x + 65, y=row_y + 15,
+            width=width - 88, height=28, max_font=24, min_font=17,
+            color="#0f172a", bold=True, start=start + idx * 0.08 + 0.03
+        )
+    return current, layer_num
+
+
+def add_micro_course_formula_block(filters, current, layer_num, formula, *, x, y, width, height, start=0.62, accent="#2563eb"):
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 18, y + 18, width, height), "black@0.045", 34, start)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, width, height), "#ffffff@0.92", 34, start + 0.03)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 26, y + 24, 120, 38), f"{accent}@0.14", 19, start + 0.08)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "关键式", x=x + 50, y=y + 33, font_size=20, color=accent, bold=True, start=start + 0.10)
+    display_formula = formula or "先看条件，再代入检验"
+    if is_pure_math_text(display_formula):
+        formula_area_h = max(40, height - 120)
+        formula_font = min(38, max(22, int(formula_area_h * 0.28)))
+        current, layer_num = add_formula_overlay(
+            filters, current, layer_num, display_formula,
+            x=x + 52, y=y + 78, width=width - 104, height=formula_area_h,
+            font_size=formula_font,
+            color="#0f172a", bold=True, start=start + 0.18
+        )
+    elif contains_display_formula(display_formula):
+        current, layer_num = add_micro_course_safe_text(
+            filters, current, layer_num, display_formula,
+            x=x + 72, y=y + 88, width=width - 144, height=height - 128,
+            max_font=42, min_font=22, color="#0f172a", bold=True, start=start + 0.18
+        )
+    else:
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, display_formula,
+            x=x + 72, y=y + 88, width=width - 144, height=height - 128,
+            max_font=58, min_font=28, color="#0f172a", bold=True, start=start + 0.18, safety=0.92
+        )
+    return current, layer_num
+
+
+def add_micro_course_rule_formula(filters, current, layer_num, formula, *, x, y, width, height, start=0.62, accent="#2563eb"):
+    lines = [part.strip() for part in re.split(r"[；;]", normalize_video_text(formula)) if part.strip()]
+    if is_pure_math_text(formula) or len(lines) <= 1:
+        return add_micro_course_formula_block(filters, current, layer_num, formula, x=x, y=y, width=width, height=height, start=start, accent=accent)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 18, y + 18, width, height), "black@0.045", 34, start)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, width, height), "#ffffff@0.92", 34, start + 0.03)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 26, y + 24, 120, 38), f"{accent}@0.14", 19, start + 0.08)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, "关键式", x=x + 50, y=y + 33, font_size=20, color=accent, bold=True, start=start + 0.10)
+    line_h = max(48, int((height - 108) / min(3, len(lines))))
+    for idx, line in enumerate(lines[:3]):
+        if is_pure_math_text(line):
+            current, layer_num = add_formula_overlay(
+                filters, current, layer_num, line,
+                x=x + 72, y=y + 82 + idx * line_h, width=width - 144, height=line_h,
+                font_size=min(44, max(24, int(line_h * 0.62))),
+                color="#0f172a", bold=True, start=start + 0.18 + idx * 0.06
+            )
+        elif contains_display_formula(line):
+            current, layer_num = add_micro_course_safe_text(
+                filters, current, layer_num, line,
+                x=x + 72, y=y + 86 + idx * line_h, width=width - 144, height=line_h - 8,
+                max_font=32, min_font=18, color="#0f172a", bold=True, start=start + 0.18 + idx * 0.06
+            )
+        else:
+            current, layer_num = add_bounded_text(
+                filters, current, layer_num, line,
+                x=x + 72, y=y + 86 + idx * line_h, width=width - 144, height=line_h - 8,
+                max_font=38, min_font=22, color="#0f172a", bold=True, start=start + 0.18 + idx * 0.06, safety=0.92
+            )
+    return current, layer_num
+
+
+def add_micro_course_image_scene(filters, current, layer_num, *, box, label, start=0.50, accent="#2563eb"):
+    x, y, w, h = box
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 16, y + 18, w, h), "black@0.050", 34, start)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, w, h), "white@0.88", 34, start + 0.03)
+    current, layer_num = add_filter_visual_contain(filters, current, layer_num, box=(x + 30, y + 34, w - 60, h - 82), opacity=1.0, start=start + 0.08)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 30, y + h - 42, w - 60, 30), f"{accent}@0.12", 15, start + 0.14)
+    current, layer_num = add_bounded_text(filters, current, layer_num, label, x=x + 52, y=y + h - 36, width=w - 104, height=20, max_font=18, min_font=14, color=accent, bold=True, start=start + 0.16)
+    return current, layer_num
+
+
+def add_micro_course_diag_line(filters, current, layer_num, x1, y1, x2, y2, color, thickness=10, start=0.0, pieces=26):
+    if abs(x2 - x1) < 2 or abs(y2 - y1) < 2:
+        return add_filter_axis_line(filters, current, layer_num, x1, y1, x2, y2, color, thickness, start)
+    pieces = max(8, int(pieces))
+    for idx in range(pieces + 1):
+        t = idx / pieces
+        px = int(round(x1 + (x2 - x1) * t - thickness / 2))
+        py = int(round(y1 + (y2 - y1) * t - thickness / 2))
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (px, py, thickness, thickness), color, "fill", start)
+    return current, layer_num
+
+
+def add_micro_course_area_model(filters, current, layer_num, *, box, start=0.48, accent="#2563eb"):
+    x, y, w, h = [int(v) for v in box]
+    size = int(min(w * 0.36, h * 0.66))
+    sx = x + 44
+    sy = y + 86
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (sx, sy, size, size), "#dbeafe@0.90", 24, start + 0.08)
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (sx, sy, size, size), accent, 5, start + 0.10)
+    step = max(1, size // 3)
+    for i in range(1, 3):
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (sx + i * step, sy, 3, size), "#93c5fd@0.90", "fill", start + 0.12 + i * 0.03)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (sx, sy + i * step, size, 3), "#93c5fd@0.90", "fill", start + 0.12 + i * 0.03)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "面积 9", x=sx + 38, y=sy + size // 2 - 22, width=size - 76, height=44, max_font=31, min_font=20, color="#08215c", bold=True, start=start + 0.18)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "边长 = √9 = 3", x=sx - 12, y=sy + size + 22, width=size + 24, height=36, max_font=25, min_font=17, color="#0f172a", bold=True, start=start + 0.24)
+
+    tx = sx + size + 86
+    ty = sy + 24
+    base = int(min(w * 0.26, h * 0.48))
+    height = int(base * 0.78)
+    x0, y0 = tx, ty + height
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (x0, y0, base, 6), "#334155", "fill", start + 0.12)
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (x0, y0 - height, 6, height), "#334155", "fill", start + 0.12)
+    current, layer_num = add_micro_course_diag_line(filters, current, layer_num, x0 + 3, y0 - height, x0 + base, y0, "#f59e0b", 9, start + 0.18, pieces=24)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "直角边 a、b", x=x0 + 16, y=y0 + 20, width=base, height=30, max_font=20, min_font=14, color="#334155", bold=True, start=start + 0.24)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "c = √(a²+b²)", x=x0 + base - 96, y=y0 - height // 2 - 36, width=185, height=42, max_font=24, min_font=16, color="#92400e", bold=True, start=start + 0.30)
+
+    px = tx
+    py = sy + size - 18
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (px, py, base + 88, 58), "#dcfce7@0.90", 18, start + 0.30)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "速度 v = √(2E/m)", x=px + 24, y=py + 15, width=base + 44, height=28, max_font=22, min_font=15, color="#166534", bold=True, start=start + 0.36)
+    return current, layer_num
+
+
+def add_micro_course_arrow(filters, current, layer_num, x1, y1, x2, y2, color, *, thickness=9, start=0.0, label="", label_box=None):
+    current, layer_num = add_micro_course_diag_line(filters, current, layer_num, x1, y1, x2, y2, color, thickness, start, pieces=24)
+    angle = math.atan2(y2 - y1, x2 - x1)
+    head_len = max(24, int(thickness * 4.0))
+    wing = 0.58
+    for delta in (math.pi - wing, math.pi + wing):
+        hx = int(round(x2 + math.cos(angle + delta) * head_len))
+        hy = int(round(y2 + math.sin(angle + delta) * head_len))
+        current, layer_num = add_micro_course_diag_line(filters, current, layer_num, hx, hy, x2, y2, color, thickness, start + 0.02, pieces=8)
+    if label:
+        if label_box:
+            lx, ly, lw, lh = label_box
+        else:
+            lx = int((x1 + x2) / 2 - 70)
+            ly = int((y1 + y2) / 2 - 42)
+            lw, lh = 140, 32
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (lx, ly, lw, lh), "white@0.86", 14, start + 0.04)
+        current, layer_num = add_bounded_text(filters, current, layer_num, label, x=lx + 10, y=ly + 6, width=lw - 20, height=lh - 10, max_font=20, min_font=14, color=color, bold=True, start=start + 0.06)
+    return current, layer_num
+
+
+def friction_focus_from_text(text):
+    text = normalize_video_text(text)
+    if any(keyword in text for keyword in ("公式", "计算", "正压力", "μ", "动摩擦因数")):
+        return "formula"
+    if any(keyword in text for keyword in ("静摩擦", "趋势", "方向", "未动")):
+        return "static"
+    if any(keyword in text for keyword in ("增大", "鞋底", "轮胎", "有益")):
+        return "increase"
+    if any(keyword in text for keyword in ("减小", "润滑", "滚动", "轴承", "有害")):
+        return "reduce"
+    if any(keyword in text for keyword in ("实验", "测力计", "木块", "数据", "探究")):
+        return "experiment"
+    return "default"
+
+
+def add_micro_course_friction_model(filters, current, layer_num, *, box, formula="", focus="default", start=0.48, accent="#2563eb"):
+    x, y, w, h = [int(v) for v in box]
+    ground_y = y + int(h * 0.68)
+    block_w = int(min(w * 0.34, 230))
+    block_h = int(min(h * 0.27, 104))
+    block_x = x + int(w * 0.34)
+    block_y = ground_y - block_h
+
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 46, ground_y, w - 92, 22), "#94a3b8@0.45", 11, start + 0.08)
+    for idx in range(14):
+        tick_x = x + 58 + idx * max(24, (w - 128) // 14)
+        current, layer_num = add_micro_course_diag_line(filters, current, layer_num, tick_x, ground_y + 20, tick_x + 26, ground_y + 48, "#64748b@0.72", 4, start + 0.10 + idx * 0.004, pieces=5)
+
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (block_x + 10, block_y + 12, block_w, block_h), "black@0.065", 24, start + 0.12)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (block_x, block_y, block_w, block_h), "#fef3c7@0.96", 24, start + 0.14)
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (block_x + 18, block_y + 22, block_w - 36, 6), "#f59e0b@0.80", "fill", start + 0.18)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "木块", x=block_x + 58, y=block_y + 45, width=block_w - 116, height=34, max_font=26, min_font=18, color="#92400e", bold=True, start=start + 0.20)
+
+    mid_x = block_x + block_w // 2
+    mid_y = block_y + block_h // 2
+    current, layer_num = add_micro_course_arrow(filters, current, layer_num, block_x + block_w + 18, mid_y, block_x + block_w + 176, mid_y, "#2563eb", thickness=10, start=start + 0.24, label="外力 F", label_box=(block_x + block_w + 70, mid_y - 54, 104, 32))
+    current, layer_num = add_micro_course_arrow(filters, current, layer_num, block_x - 22, mid_y, block_x - 172, mid_y, "#ef4444", thickness=10, start=start + 0.30, label="摩擦力 f", label_box=(block_x - 172, mid_y - 54, 130, 32))
+    current, layer_num = add_micro_course_arrow(filters, current, layer_num, mid_x, block_y - 12, mid_x, block_y - 126, "#16a34a", thickness=9, start=start + 0.36, label="N", label_box=(mid_x + 18, block_y - 112, 58, 30))
+    current, layer_num = add_micro_course_arrow(filters, current, layer_num, mid_x, block_y + block_h + 10, mid_x, block_y + block_h + 120, "#475569", thickness=9, start=start + 0.42, label="G", label_box=(mid_x + 18, block_y + block_h + 66, 58, 30))
+
+    formula_text = normalize_video_text(formula)
+    if not formula_text:
+        if focus == "static":
+            formula_text = "0 ≤ fs ≤ μsN"
+        elif focus == "formula":
+            formula_text = "F = μN"
+        else:
+            formula_text = "f 阻碍相对运动"
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 72, y + 56, w - 144, 70), f"{accent}@0.12", 24, start + 0.18)
+    if contains_math_notation(formula_text) or "μ" in formula_text:
+        current, layer_num = add_formula_overlay(
+            filters, current, layer_num, formula_text,
+            x=x + 96, y=y + 70, width=w - 192, height=42,
+            font_size=28, color="#0f172a", bold=True, start=start + 0.24
+        )
+    else:
+        current, layer_num = add_bounded_text(filters, current, layer_num, formula_text, x=x + 96, y=y + 72, width=w - 192, height=36, max_font=26, min_font=17, color="#0f172a", bold=True, start=start + 0.24)
+
+    tips = {
+        "formula": "粗糙程度影响 μ，正压力 N 变大时滑动摩擦力也变大。",
+        "static": "静摩擦会随外力变化，但不会超过最大静摩擦力。",
+        "increase": "增大粗糙程度或压力，可以提升抓地、防滑效果。",
+        "reduce": "润滑或改为滚动接触，可以减少能量损耗和磨损。",
+        "experiment": "匀速拉动时，测力计示数近似等于滑动摩擦力。",
+        "default": "方向判断先看相对运动或相对运动趋势，再取相反方向。",
+    }
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 82, y + h - 82, w - 164, 46), "#ecfeff@0.88", 20, start + 0.48)
+    current, layer_num = add_bounded_text(filters, current, layer_num, tips.get(focus, tips["default"]), x=x + 112, y=y + h - 70, width=w - 224, height=24, max_font=21, min_font=14, color="#0f766e", bold=True, start=start + 0.52)
+    return current, layer_num
+
+
+def add_micro_course_number_line(filters, current, layer_num, *, box, formula, start=0.48, accent="#7c3aed", mode="domain"):
+    x, y, w, h = [int(v) for v in box]
+    line_y = y + h // 2 + 42
+    line_x = x + 70
+    line_w = w - 140
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (line_x, line_y, line_w, 5), "#334155", "fill", start + 0.10)
+    ticks = [("-2", 0.10), ("0", 0.30), ("2", 0.50), ("4", 0.70), ("6", 0.90)]
+    for label, pos in ticks:
+        tx = int(line_x + line_w * pos)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (tx, line_y - 14, 4, 28), "#334155", "fill", start + 0.14)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=tx - 12, y=line_y + 24, font_size=20, color="#475569", bold=True, start=start + 0.18)
+    start_x = int(line_x + line_w * 0.30)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (start_x, line_y - 12, line_w - (start_x - line_x), 24), f"{accent}@0.20", 12, start + 0.22)
+    current, layer_num = add_filter_circle(filters, current, layer_num, start_x, line_y, 12, accent, start + 0.26)
+    if contains_math_notation(formula):
+        current, layer_num = add_formula_overlay(
+            filters, current, layer_num, formula,
+            x=x + 72, y=y + 60, width=w - 144, height=54,
+            font_size=30, color="#0f172a", bold=True, start=start + 0.30
+        )
+    else:
+        current, layer_num = add_bounded_text(filters, current, layer_num, formula, x=x + 72, y=y + 64, width=w - 144, height=46, max_font=31, min_font=19, color="#0f172a", bold=True, start=start + 0.30)
+    hint = "代回验根：负一舍去，二成立" if mode == "equation" else "根号内 ≥ 0，先把允许的 x 范围圈出来"
+    current, layer_num = add_bounded_text(filters, current, layer_num, hint, x=x + 72, y=y + h - 68, width=w - 144, height=32, max_font=22, min_font=15, color="#5b21b6", bold=True, start=start + 0.36)
+    return current, layer_num
+
+
+def add_micro_course_root_curve(filters, current, layer_num, *, box, formula, start=0.48, accent="#2563eb"):
+    x, y, w, h = [int(v) for v in box]
+    axis_y = y + h - 82
+    axis_x = x + 82
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (axis_x, axis_y, w - 145, 5), "#334155", "fill", start + 0.10)
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (axis_x + 62, y + 70, 5, h - 145), "#334155", "fill", start + 0.10)
+    points = [
+        (axis_x + 66, axis_y - 8),
+        (axis_x + 132, axis_y - 64),
+        (axis_x + 236, axis_y - 112),
+        (axis_x + 366, axis_y - 154),
+        (axis_x + 516, axis_y - 188),
+    ]
+    for idx in range(len(points) - 1):
+        current, layer_num = add_micro_course_diag_line(filters, current, layer_num, *points[idx], *points[idx + 1], accent, 9, start + 0.18 + idx * 0.04, pieces=12)
+    current, layer_num = add_filter_circle(filters, current, layer_num, points[0][0], points[0][1], 11, "#16a34a", start + 0.24)
+    if contains_math_notation(formula):
+        current, layer_num = add_formula_overlay(
+            filters, current, layer_num, formula,
+            x=x + 100, y=y + 58, width=w - 200, height=50,
+            font_size=28, color="#0f172a", bold=True, start=start + 0.30
+        )
+    else:
+        current, layer_num = add_bounded_text(filters, current, layer_num, formula, x=x + 100, y=y + 64, width=w - 200, height=42, max_font=30, min_font=18, color="#0f172a", bold=True, start=start + 0.30)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "起点由定义域决定，曲线只向右延伸", x=x + 110, y=axis_y + 22, width=w - 220, height=30, max_font=21, min_font=14, color="#334155", bold=True, start=start + 0.38)
+    return current, layer_num
+
+
+def add_micro_course_math_visual(filters, current, layer_num, ctx, *, box, start=0.48, accent="#2563eb"):
+    x, y, w, h = box
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 16, y + 18, w, h), "black@0.045", 34, start)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, w, h), "white@0.88", 34, start + 0.03)
+    title = normalize_video_text(ctx.get("title", ""))
+    combined = " ".join([title, *[normalize_video_text(line) for line in ctx.get("rest", [])], *[normalize_video_text(line) for line in ctx.get("points", [])]])
+    formula = ctx.get("formula") or ""
+    if any(keyword in combined for keyword in ("摩擦", "静摩擦", "滑动摩擦", "滚动摩擦", "粗糙", "正压力", "测力计", "μ")):
+        focus = friction_focus_from_text(combined)
+        return add_micro_course_friction_model(
+            filters, current, layer_num, box=(x, y, w, h), formula=formula,
+            focus=focus, start=start, accent=accent
+        )
+    if any(keyword in combined for keyword in ("应用", "场景", "几何", "物理", "距离", "速度", "面积")):
+        return add_micro_course_area_model(filters, current, layer_num, box=(x, y, w, h), start=start, accent=accent)
+
+    if "不等式" in title or ("方程" in title and "函数" not in title):
+        expression = formula or ("√(x-2) ≥ 0" if "不等式" in title else "√(x+1) = 3")
+        return add_micro_course_number_line(
+            filters, current, layer_num, box=(x, y, w, h), formula=expression,
+            start=start, accent=accent, mode="equation" if "方程" in title else "domain"
+        )
+
+    if "函数" in title:
+        return add_micro_course_root_curve(filters, current, layer_num, box=(x, y, w, h), formula=formula or "y = √(x-2)", start=start, accent=accent)
+
+    if "分类" in title:
+        entries = [("算术平方根", "√9 = 3"), ("平方根", "x² = 9 → x = ±3"), ("立方根", "³√8 = 2")]
+        for idx, (label, formula) in enumerate(entries):
+            row_y = y + 70 + idx * 105
+            color = ["#2563eb", "#16a34a", "#f59e0b"][idx]
+            current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 50, row_y, w - 100, 72), f"{color}@0.12", 24, start + 0.10 + idx * 0.07)
+            current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 82, y=row_y + 21, font_size=24, color=color, bold=True, start=start + 0.14 + idx * 0.07)
+            current, layer_num = add_micro_course_safe_text(filters, current, layer_num, formula, x=x + 315, y=row_y + 14, width=w - 390, height=46, max_font=26, min_font=18, color="#0f172a", bold=True, start=start + 0.16 + idx * 0.07)
+        return current, layer_num
+
+    if any(keyword in title for keyword in ("乘法", "除法", "加减", "化简")):
+        if "乘法" in title:
+            formula = "√a × √b = √(a×b)"
+        elif "除法" in title:
+            formula = "√a ÷ √b = √(a÷b)"
+        elif "加减" in title:
+            formula = "m√a ± n√a = (m±n)√a"
+        elif "化简" in title:
+            formula = ctx.get("formula") or "√72 = √(36×2) = 6√2"
+        else:
+            formula = ctx.get("formula") or "√a 运算先看条件"
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 78, y + 75, w - 156, 120), "#dbeafe@0.70", 30, start + 0.10)
+        if is_pure_math_text(formula):
+            current, layer_num = add_formula_overlay(
+                filters, current, layer_num, formula,
+                x=x + 120, y=y + 100, width=w - 240, height=54,
+                font_size=34, color="#0f172a", bold=True, start=start + 0.16
+            )
+        else:
+            current, layer_num = add_bounded_text(filters, current, layer_num, formula, x=x + 120, y=y + 105, width=w - 240, height=70, max_font=34, min_font=20, color="#0f172a", bold=True, start=start + 0.16)
+        if "除法" in title:
+            current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 120, y + 174, 320, 30), "#eff6ff@0.92", 14, start + 0.20)
+            current, layer_num = add_bounded_text(
+                filters, current, layer_num, "条件：a ≥ 0，b > 0",
+                x=x + 136, y=y + 178, width=288, height=20,
+                max_font=18, min_font=14, color="#475569", bold=True, start=start + 0.22
+            )
+        steps = ["确认条件", "变形计算", "回代检验"]
+        for idx, step in enumerate(steps):
+            step_x = x + 78 + idx * ((w - 156) // 3)
+            current, layer_num = add_filter_circle(filters, current, layer_num, step_x + 38, y + 275, 24, ["#2563eb", "#16a34a", "#f59e0b"][idx], start + 0.26 + idx * 0.05)
+            current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=step_x + 29, y=y + 257, font_size=24, color="white", bold=True, start=start + 0.30 + idx * 0.05)
+            current, layer_num = add_bounded_text(filters, current, layer_num, step, x=step_x + 76, y=y + 256, width=(w - 156) // 3 - 88, height=36, max_font=21, min_font=15, color="#111827", bold=True, start=start + 0.34 + idx * 0.05)
+        return current, layer_num
+
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 92, y + 95, w - 184, 126), "#dbeafe@0.66", 34, start + 0.10)
+    formula_lines = [part.strip() for part in re.split(r"[；;]", normalize_video_text(ctx.get("formula") or "√a 表示非负平方根")) if part.strip()]
+    for idx, line in enumerate(formula_lines[:2]):
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, line, x=x + 140, y=y + 112 + idx * 56, width=w - 280, height=44, max_font=30, min_font=18, color="#0f172a", bold=True, start=start + 0.16 + idx * 0.05)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 135, y + 270, w - 270, 54), "#dcfce7@0.78", 20, start + 0.26)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "先判断被开方数，再确定结果范围。", x=x + 170, y=y + 285, width=w - 340, height=26, max_font=23, min_font=17, color="#166534", bold=True, start=start + 0.32)
+    return current, layer_num
+
+
+def layout_micro_course_opener(ctx, slide_data, slide_num, duration, project=None):
+    filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "简明精讲 / 公式理解 / 例题应用", 0.12)
+    if ctx["visual_asset"]:
+        current, layer_num = add_micro_course_image_scene(filters, current, layer_num, box=(1040, 230, 710, 475), label="本节主题图", start=0.48, accent="#1d4ed8")
+        left_w = 760
+    else:
+        left_w = 1100
+    current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=155, y=255, width=left_w, height=88, max_font=34, min_font=22, color="#0f172a", bold=True, start=0.42)
+    current, layer_num = add_micro_course_point_stack(filters, current, layer_num, ctx["points"][:3], x=155, y=410, width=left_w, accent="#1d70c9", start=0.62)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (155, 790, 1220, 86), "#dbeafe@0.82", 28, 0.96)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "学习路径：符号含义 / 限制条件 / 运算方法 / 题目检验。", x=205, y=812, width=1120, height=42, max_font=28, min_font=20, color="#08215c", bold=True, start=1.02)
+    return filters, current, layer_num
+
+
+def layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, project=None):
+    filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "先抓条件，再看公式怎么用", 0.12)
+    lead_text = micro_course_formula_lead_text(ctx)
+    current, layer_num = add_bounded_text(filters, current, layer_num, lead_text, x=110, y=210, width=710, height=104, max_font=28, min_font=19, color="#111827", start=0.38)
+    current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, ctx["formula"], x=940, y=225, width=760, height=245, start=0.50, accent="#2563eb")
+    labels = ["条件", "表达", "检验"]
+    point_source = ctx["points"][:3] or ["看被开方数是否有意义", "把文字换成专业符号", "用具体数字代入验证"]
+    for idx, label in enumerate(labels):
+        x = 175 + idx * 520
+        y = 620
+        accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 430, 125), f"{accent}@0.11", 28, 0.72 + idx * 0.08)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 32, y=y + 26, font_size=28, color=accent, bold=True, start=0.78 + idx * 0.08)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point_source[idx] if idx < len(point_source) else label, x=x + 32, y=y + 60, width=365, height=56, max_font=23, min_font=16, color="#0f172a", bold=True, start=0.84 + idx * 0.08)
+    if ctx["examples"]:
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (340, 835, 1240, 70), "#f5f3ff@0.92", 22, 1.02)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"快速检验：{ctx.get('check') or ctx['examples'][0]}", x=390, y=846, width=1140, height=48, max_font=26, min_font=18, color="#5b21b6", bold=True, start=1.08)
+    return filters, current, layer_num
+
+
+def layout_micro_course_case_scene(ctx, slide_data, slide_num, duration, project=None):
+    filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "用图像和案例降低理解成本", 0.12)
+    current, layer_num = add_micro_course_math_visual(filters, current, layer_num, ctx, box=(110, 235, 820, 430), start=0.42, accent="#1d4ed8")
+    text_x, text_w = 1015, 735
+    current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=text_x, y=235, width=text_w, height=92, max_font=31, min_font=20, color="#111827", bold=True, start=0.52)
+    for idx, point in enumerate(ctx["points"][:3]):
+        y = 390 + idx * 120
+        accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (text_x, y, text_w, 84), "white@0.82", 24, 0.68 + idx * 0.08)
+        current, layer_num = add_filter_circle(filters, current, layer_num, text_x + 42, y + 42, 18, f"{accent}@0.22", 0.70 + idx * 0.08)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=text_x + 34, y=y + 27, font_size=22, color=accent, bold=True, start=0.72 + idx * 0.08)
+        current, layer_num = add_bounded_text(filters, current, layer_num, point, x=text_x + 82, y=y + 22, width=text_w - 120, height=38, max_font=25, min_font=17, color="#0f172a", bold=True, start=0.76 + idx * 0.08)
+    bottom = ctx.get("check") or (ctx["examples"][0] if ctx["examples"] else (ctx["formula"] or "用一个具体数检验结论是否成立。"))
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (265, 855, 1390, 64), "#ecfeff@0.90", 22, 1.02)
+    current, layer_num = add_bounded_text(filters, current, layer_num, f"落地看：{bottom}", x=320, y=872, width=1280, height=30, max_font=24, min_font=17, color="#155e75", bold=True, start=1.08)
+    return filters, current, layer_num
+
+
+def layout_micro_course_example_workbench(ctx, slide_data, slide_num, duration, project=None):
+    filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "例题不单独成格，而是和规则一起演示", 0.12)
+    formula = ctx["formula"] or (ctx["examples"][0] if ctx["examples"] else "先列式，再化简，最后验算")
+    current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, formula, x=120, y=220, width=700, height=210, start=0.42, accent="#16a34a")
+    steps = ctx.get("steps", [])[:3]
+    if len(steps) < 3:
+        steps.extend(ctx["points"][: 3 - len(steps)])
+    if len(steps) < 3:
+        steps.extend(["先看条件是否成立", "再把文字翻译成符号", "最后代入数字检验"][: 3 - len(steps)])
+    for idx, step in enumerate(steps[:3]):
+        x = 910
+        y = 235 + idx * 145
+        accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 780, 105), "white@0.86", 28, 0.52 + idx * 0.10)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, f"Step {idx + 1}", x=x + 34, y=y + 24, font_size=24, color=accent, bold=True, start=0.58 + idx * 0.10)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, step, x=x + 155, y=y + 14, width=585, height=70, max_font=24, min_font=15, color="#0f172a", bold=True, start=0.62 + idx * 0.10)
+    current, layer_num = add_micro_course_math_visual(filters, current, layer_num, ctx, box=(135, 515, 650, 290), start=0.88, accent="#7c3aed")
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (260, 860, 1400, 60), "#dbeafe@0.86", 20, 1.12)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "不要只看答案，重点看每一步用了哪个条件。", x=320, y=876, width=1280, height=28, max_font=24, min_font=18, color="#08215c", bold=True, start=1.18)
+    return filters, current, layer_num
+
+
+def layout_micro_course_concept_bites(ctx, slide_data, slide_num, duration, project=None):
+    filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
+    subtitle = "概念路径 / 运算方法 / 进阶应用" if normalize_video_text(ctx["title"]) == "目录" else "重点信息分层讲清楚"
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], subtitle, 0.12)
+    current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=170, y=235, width=780, height=80, max_font=32, min_font=21, color="#111827", bold=True, start=0.42)
+    center_text = ctx["formula"] or ctx["points"][0]
+    current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, center_text, x=1060, y=235, width=570, height=225, start=0.50, accent="#7c3aed")
+    positions = [(210, 505), (735, 575), (1260, 505)]
+    for idx, point in enumerate(ctx["points"][:3]):
+        x, y = positions[idx]
+        accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
+        current, layer_num = add_filter_circle(filters, current, layer_num, x + 165, y + 95, 112, f"{accent}@0.14", 0.68 + idx * 0.08)
+        current, layer_num = add_filter_circle(filters, current, layer_num, x + 165, y + 95, 82, "white@0.86", 0.72 + idx * 0.08)
+        current, layer_num = add_bounded_text(filters, current, layer_num, point, x=x + 55, y=y + 72, width=220, height=46, max_font=24, min_font=16, color="#0f172a", bold=True, start=0.78 + idx * 0.08)
+    bottom_text = ctx.get("check") or (ctx["examples"][0] if ctx["examples"] else "")
+    if bottom_text:
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (420, 845, 1080, 64), "#f5f3ff@0.90", 22, 1.02)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"讲解路径：{bottom_text}", x=475, y=854, width=970, height=46, max_font=24, min_font=17, color="#5b21b6", bold=True, start=1.08)
+    return filters, current, layer_num
+
+
+def layout_micro_course(slide_data, slide_num, duration, project=None, recommendation=None):
+    ctx = micro_course_build_context(slide_data, slide_num, project)
+    if ctx["kind"] == "opener":
+        return layout_micro_course_opener(ctx, slide_data, slide_num, duration, project)
+    if ctx["kind"] == "case":
+        return layout_micro_course_case_scene(ctx, slide_data, slide_num, duration, project)
+    if ctx["kind"] == "example":
+        return layout_micro_course_example_workbench(ctx, slide_data, slide_num, duration, project)
+    if ctx["kind"] == "formula":
+        return layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, project)
+    return layout_micro_course_concept_bites(ctx, slide_data, slide_num, duration, project)
+
+
 def layout_diverse(slide_data, slide_num, duration, project=None, recommendation=None):
     component = selected_visual_component(recommendation)
     kind = adaptive_layout_kind(slide_data, slide_num, project, recommendation)
+    title, rest = slide_context(slide_data, slide_num, project)
+    probe_cards = content_cards_from_lines(rest, limit=5)
+    formula_like = is_formula_rule_text(title + " " + " ".join(rest))
+    preserve_special_radial = component == "radial_concept_map" and is_radical_division_rule(title, rest)
+    if not preserve_special_radial and component in {"radial_concept_map", "application_storyboard"} and cards_are_sparse_or_unstable(probe_cards):
+        component = "formula_walkthrough" if formula_like else "rounded_step_cards"
+    if not preserve_special_radial and formula_like and component in {"radial_concept_map", "application_storyboard", "rounded_step_cards"}:
+        component = "formula_walkthrough"
+    if component == "blackboard_derivation":
+        return layout_diverse_blackboard_derivation(slide_data, slide_num, duration, project)
+    if component == "formula_walkthrough":
+        return layout_diverse_formula_walkthrough(slide_data, slide_num, duration, project)
+    if component == "checkpoint_ladder":
+        return layout_diverse_checkpoint_ladder(slide_data, slide_num, duration, project)
+    if component == "radial_concept_map":
+        return layout_diverse_radial_concept_map(slide_data, slide_num, duration, project)
+    if component == "magazine_spread":
+        return layout_diverse_editorial(slide_data, slide_num, duration, project)
+    if component == "rounded_step_cards":
+        return layout_diverse_rounded_step_cards(slide_data, slide_num, duration, project)
+    if component == "misconception_compare":
+        return layout_diverse_misconception_compare(slide_data, slide_num, duration, project)
+    if component == "application_storyboard":
+        return layout_diverse_application_storyboard(slide_data, slide_num, duration, project)
     if slide_num == 2:
         return layout_diverse_soft_bubbles(slide_data, slide_num, duration, project)
     if slide_num == 4:
@@ -3982,11 +7046,15 @@ def generate_preserved_slide(project, slide_num, audio_path, output_path, durati
 
 def generate_slide(slide_data, audio_path, output_path, duration, slide_num, recommendation=None, project=None, style=None, log_path=None):
     """生成单个幻灯片视频"""
-    visual_asset = slide_visual_asset_for_layout(project, slide_num, slide_data)
+    RENDER_CONTEXT.project = project
+    RENDER_CONTEXT.formula_assets = []
+    visual_asset = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
     if style == "adaptive":
         layout_type = "adaptive"
     elif style == "diverse":
         layout_type = "diverse"
+    elif style == "micro-course":
+        layout_type = "micro_course"
     elif style == "clean-cards":
         layout_type = "clean_cards"
     else:
@@ -4003,6 +7071,8 @@ def generate_slide(slide_data, audio_path, output_path, duration, slide_num, rec
         filters, current, layer_num = layout_diverse(slide_data, slide_num, duration, project, recommendation)
     elif layout_type == "adaptive":
         filters, current, layer_num = layout_adaptive(slide_data, slide_num, duration, project, recommendation)
+    elif layout_type == "micro_course":
+        filters, current, layer_num = layout_micro_course(slide_data, slide_num, duration, project, recommendation)
     elif layout_type == "clean_cards":
         filters, current, layer_num = layout_clean_cards(slide_data, slide_num, duration, project)
     else:
@@ -4012,16 +7082,22 @@ def generate_slide(slide_data, audio_path, output_path, duration, slide_num, rec
         filters, current, layer_num = layout_three_column(filters, current, layer_num, slide_data, slide_num)
     elif layout_type == 'two_column':
         filters, current, layer_num = layout_two_column(filters, current, layer_num, slide_data, slide_num)
-    elif layout_type not in {"clean_cards", "adaptive", "diverse"}:
+    elif layout_type not in {"clean_cards", "adaptive", "diverse", "micro_course"}:
         filters, current, layer_num = layout_single_column(filters, current, layer_num, slide_data, slide_num)
 
+    formula_assets = list(getattr(RENDER_CONTEXT, "formula_assets", []))
     filter_complex = ";".join(filters)
     filter_script_path = None
     cmd = ["ffmpeg", "-y"]
-    audio_input_index = 0
+    next_input_index = 0
     if visual_asset:
         cmd.extend(["-loop", "1", "-i", str(visual_asset)])
-        audio_input_index = 1
+        next_input_index += 1
+    for idx, formula_asset in enumerate(formula_assets):
+        cmd.extend(["-loop", "1", "-i", str(formula_asset)])
+        filter_complex = filter_complex.replace(f"[formula_in{idx}]", f"[{next_input_index}:v]")
+        next_input_index += 1
+    audio_input_index = next_input_index
     if audio_path and audio_path.exists():
         cmd.extend(["-i", str(audio_path)])
     else:
@@ -4341,28 +7417,57 @@ def build_srt_from_script_plan(project, rendered_slides, output_path):
     blocks = []
     seq = 1
     offset = 0.0
+    audio_dir = project / "audio"
     for item in rendered_slides:
-        slide_num, duration = item[:2]
+        if len(item) >= 3:
+            slide_num, duration, audio_path = item[:3]
+        else:
+            slide_num, duration = item[:2]
+            audio_path = audio_dir / f"page_{int(slide_num):02d}.mp3"
         plan = plans.get(slide_num, {})
         chunks = plan.get("subtitle_chunks") or []
+        expanded_chunks = []
         for chunk in chunks:
-            text = normalize_video_text(chunk.get("text", ""))
+            text = restore_math_notation_for_subtitles(chunk.get("text", ""))
             if is_noise_line(text):
                 continue
-            start = offset + max(0.0, min(float(chunk.get("start", 0.0) or 0.0), duration))
-            end = offset + max(0.0, min(float(chunk.get("end", duration) or duration), duration))
+            start = max(0.0, min(float(chunk.get("start", 0.0) or 0.0), duration))
+            end = max(0.0, min(float(chunk.get("end", duration) or duration), duration))
             if end <= start:
                 continue
             subtitle_parts = split_subtitle_text(text)
             span = end - start
             part_count = max(1, len(subtitle_parts))
             for idx, part in enumerate(subtitle_parts):
-                part_start = start + span * idx / part_count
-                part_end = start + span * (idx + 1) / part_count
-                blocks.append(
-                    f"{seq}\n{format_srt_timestamp(part_start)} --> {format_srt_timestamp(part_end)}\n{part}\n"
+                expanded_chunks.append(
+                    {
+                        "start": start + span * idx / part_count,
+                        "end": start + span * (idx + 1) / part_count,
+                        "text": part,
+                    }
                 )
-                seq += 1
+        if not expanded_chunks:
+            offset += duration
+            continue
+        weights = [
+            max(1.0, visual_text_len(chunk["text"]))
+            for chunk in expanded_chunks
+        ]
+        cutpoints = detect_audio_silence_cutpoints(audio_path, duration)
+        cuts = subtitle_cuts_from_audio(duration, weights, cutpoints)
+        local_times = [0.0] + cuts + [duration]
+        slide_end = offset + duration
+        for idx, chunk in enumerate(expanded_chunks):
+            part_start = offset + local_times[idx]
+            part_end = offset + local_times[idx + 1]
+            if idx == len(expanded_chunks) - 1:
+                part_end = slide_end
+            if part_end <= part_start:
+                part_end = min(slide_end, part_start + 0.8)
+            blocks.append(
+                f"{seq}\n{format_srt_timestamp(part_start)} --> {format_srt_timestamp(part_end)}\n{chunk['text']}\n"
+            )
+            seq += 1
         offset += duration
 
     if not blocks:
@@ -4496,9 +7601,9 @@ def file_fingerprint(path):
 
 def slide_render_key(project, slide_num, slide_data, audio, recommendation, duration, style):
     art = slide_art_asset(project, slide_num)
-    visual = slide_visual_asset_for_layout(project, slide_num, slide_data)
+    visual = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
     payload = {
-        "version": 22,
+        "version": 56,
         "slide_number": slide_num,
         "slide": slide_data,
         "source_lines": source_slide_lines(project, slide_num),

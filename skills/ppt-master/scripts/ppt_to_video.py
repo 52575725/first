@@ -5632,15 +5632,51 @@ def add_micro_course_header(filters, current, layer_num, title, subtitle, start=
     return current, layer_num
 
 
+def micro_course_directory_items(rest, limit=3):
+    items = []
+    seen = set()
+    for raw in rest or []:
+        text = normalize_video_text(raw)
+        if not text or is_noise_line(text) or text == "目录":
+            continue
+        text = re.sub(r"^[0-9]+(?:\.[0-9]+)?[)\.、．\- ]*", "", text).strip()
+        text = re.sub(r"^[一二三四五六七八九十]+[、\.．\- ]*", "", text).strip()
+        if not text or re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", text):
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def micro_course_directory_label(text, limit=10):
+    text = normalize_video_text(text)
+    for sep in ("：", ":", "，", ",", "。", "·", "/", "—", "-", "、"):
+        if sep in text:
+            text = text.split(sep, 1)[0].strip()
+    if visual_text_len(text) > limit:
+        text = text[:limit].rstrip("，。；;：: ")
+    return text
+
+
+def micro_course_directory_labels(rest, limit=3):
+    return [micro_course_directory_label(item) for item in micro_course_directory_items(rest, limit=limit)]
+
+
 def micro_course_specific_points(title, rest, limit=4):
     combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
     clean_title = normalize_video_text(title)
     if clean_title == "目录":
+        labels = [label for label in micro_course_directory_labels(rest, limit=3) if label]
         points = [
-            "第一层：根号是什么，先分清定义和性质",
-            "第二层：根号怎么算，重点练乘除加减和化简",
-            "第三层：根号怎么用，放到函数、方程和不等式里",
-            "学习顺序：概念 → 运算 → 应用",
+            f"第一层：{labels[0]}，先把核心概念说清楚" if len(labels) >= 1 else "第一层：先把核心概念说清楚",
+            f"第二层：{labels[1]}，把方法和规则连起来" if len(labels) >= 2 else "第二层：把方法和规则连起来",
+            f"第三层：{labels[2]}，再落到应用和检查" if len(labels) >= 3 else "第三层：再落到应用和检查",
+            "学习顺序：概念 → 方法 → 应用",
         ]
     elif "知识全解析" in combined:
         points = [
@@ -5821,7 +5857,14 @@ def micro_course_specific_lead(title, rest):
     combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
     clean_title = normalize_video_text(title)
     if clean_title == "目录":
-        return "这节课按一条线讲：先把根号看懂，再把根式算准，最后放进题目里使用。"
+        labels = [label for label in micro_course_directory_labels(rest, limit=3) if label]
+        if len(labels) >= 3:
+            return f"这节课按一条线讲：先看{labels[0]}，再看{labels[1]}，最后看{labels[2]}。"
+        if len(labels) == 2:
+            return f"这节课按一条线讲：先看{labels[0]}，再看{labels[1]}。"
+        if len(labels) == 1:
+            return f"这节课按一条线讲：先看{labels[0]}。"
+        return "这节课按一条线讲：先看概念，再看方法，最后看应用。"
     if "知识全解析" in combined:
         return "根号的学习主线是：先理解定义与条件，再掌握运算规则，最后迁移到函数、方程和不等式。"
     if "基础概念" in combined:
@@ -5983,10 +6026,11 @@ def micro_course_teaching_steps(title, rest, cards, formula="", limit=3):
     combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
     clean_title = normalize_video_text(title)
     if clean_title == "目录":
+        labels = [label for label in micro_course_directory_labels(rest, limit=3) if label]
         steps = [
-            "先学概念：知道 √a 的含义和取值范围。",
-            "再练运算：把乘除加减都落到化简规则上。",
-            "最后进阶：把定义域带入函数、方程和不等式。",
+            f"先讲{labels[0]}，把最基础的概念说透。" if len(labels) >= 1 else "先讲概念，把最基础的内容说透。",
+            f"再讲{labels[1]}，把方法和规则连起来。" if len(labels) >= 2 else "再讲方法，把规则连起来。",
+            f"最后讲{labels[2]}，用案例或应用收尾。" if len(labels) >= 3 else "最后讲应用，用案例收尾。",
         ]
     elif any(keyword in combined for keyword in ("摩擦", "静摩擦", "滑动摩擦", "滚动摩擦", "正压力", "粗糙")):
         if any(keyword in combined for keyword in ("公式", "计算", "μ", "正压力")):
@@ -6122,7 +6166,10 @@ def micro_course_check_example(title, rest, formula="", examples=None):
     combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
     clean_title = normalize_video_text(title)
     if clean_title == "目录":
-        return "概念先行，运算跟上，最后用函数、方程、不等式检验理解"
+        labels = [label for label in micro_course_directory_labels(rest, limit=3) if label]
+        if len(labels) >= 3:
+            return f"概念先行，方法跟上，最后回到{labels[2]}检验理解。"
+        return "概念先行，方法跟上，最后回到应用场景检验理解。"
     if "基础概念" in combined:
         return "算术平方根只取非负；平方根要考虑正负"
     if "根号的定义" in combined:
@@ -6603,11 +6650,11 @@ def add_micro_course_math_visual(filters, current, layer_num, ctx, *, box, start
         return current, layer_num
 
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 92, y + 95, w - 184, 126), "#dbeafe@0.66", 34, start + 0.10)
-    formula_lines = [part.strip() for part in re.split(r"[；;]", normalize_video_text(ctx.get("formula") or "√a 表示非负平方根")) if part.strip()]
+    formula_lines = [part.strip() for part in re.split(r"[；;]", normalize_video_text(ctx.get("formula") or "核心关系：先明确条件，再代入检验")) if part.strip()]
     for idx, line in enumerate(formula_lines[:2]):
         current, layer_num = add_micro_course_safe_text(filters, current, layer_num, line, x=x + 140, y=y + 112 + idx * 56, width=w - 280, height=44, max_font=30, min_font=18, color="#0f172a", bold=True, start=start + 0.16 + idx * 0.05)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 135, y + 270, w - 270, 54), "#dcfce7@0.78", 20, start + 0.26)
-    current, layer_num = add_bounded_text(filters, current, layer_num, "先判断被开方数，再确定结果范围。", x=x + 170, y=y + 285, width=w - 340, height=26, max_font=23, min_font=17, color="#166534", bold=True, start=start + 0.32)
+    current, layer_num = add_bounded_text(filters, current, layer_num, "先看适用条件，再确定表达和结果范围。", x=x + 170, y=y + 285, width=w - 340, height=26, max_font=23, min_font=17, color="#166534", bold=True, start=start + 0.32)
     return current, layer_num
 
 
@@ -6691,7 +6738,11 @@ def layout_micro_course_example_workbench(ctx, slide_data, slide_num, duration, 
 
 def layout_micro_course_concept_bites(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
-    subtitle = "概念路径 / 运算方法 / 进阶应用" if normalize_video_text(ctx["title"]) == "目录" else "重点信息分层讲清楚"
+    if normalize_video_text(ctx["title"]) == "目录":
+        directory_labels = [label for label in micro_course_directory_labels(ctx.get("rest", []), limit=3) if label]
+        subtitle = " / ".join(directory_labels) if directory_labels else "概念路径 / 方法 / 应用"
+    else:
+        subtitle = "重点信息分层讲清楚"
     current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], subtitle, 0.12)
     current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=170, y=235, width=780, height=80, max_font=32, min_font=21, color="#111827", bold=True, start=0.42)
     center_text = ctx["formula"] or ctx["points"][0]
@@ -7826,7 +7877,7 @@ def slide_render_key(project, slide_num, slide_data, audio, recommendation, dura
     art = slide_art_asset(project, slide_num)
     visual = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
     payload = {
-        "version": 60,
+        "version": 61,
         "slide_number": slide_num,
         "slide": slide_data,
         "source_lines": source_slide_lines(project, slide_num),

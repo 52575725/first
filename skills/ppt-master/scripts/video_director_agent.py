@@ -126,6 +126,17 @@ def styled_output_names(style: str) -> tuple[str, str]:
     return "", ""
 
 
+def rendered_output_names(style: str, preview_slides: int | None = None) -> tuple[str, str]:
+    base_name, final_name = styled_output_names(style)
+    if preview_slides and preview_slides > 0 and base_name and final_name:
+        suffix = f"_preview{preview_slides}"
+        return (
+            base_name.replace("_video.mp4", f"{suffix}_video.mp4"),
+            final_name.replace("_final.mp4", f"{suffix}_final.mp4"),
+        )
+    return base_name, final_name
+
+
 def write_json(path: Path, payload: Any) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1407,7 +1418,7 @@ class RendererAgent:
         result = run_command(command, SCRIPT_DIR, timeout=ctx.args.render_timeout)
         if not result["ok"]:
             raise RuntimeError(result["stderr"] or "ppt_to_video.py failed")
-        base_name, final_name = styled_output_names(ctx.args.style)
+        base_name, final_name = rendered_output_names(ctx.args.style, ctx.args.preview_slides)
         final_video = ctx.project / "exports" / (final_name or f"{ctx.project.name}_final.mp4")
         base_video = ctx.project / "exports" / (base_name or f"{ctx.project.name}_video.mp4")
         return RoleResult(
@@ -1429,7 +1440,7 @@ class QAAgent:
 
     def run(self, ctx: AgentContext, render_plan: dict[str, Any]) -> RoleResult:
         checks: list[dict[str, Any]] = []
-        _, final_name = styled_output_names(ctx.args.style)
+        _, final_name = rendered_output_names(ctx.args.style, ctx.args.preview_slides)
         final_video = ctx.project / "exports" / (final_name or f"{ctx.project.name}_final.mp4")
         checks.append(
             {
@@ -1545,8 +1556,18 @@ class QAAgent:
         if not final_video.exists():
             return {"id": "subtitle_timing", "status": "skip", "detail": "final video missing"}
         duration = ffprobe_duration(final_video) or 0.0
-        srt_candidates = sorted((project / "exports").glob("*_style_adjusted.srt"))
-        srt_candidates += sorted((project / "exports").glob("*_adjusted.srt"))
+        expected_srt = final_video.with_name(final_video.stem.replace("_final", "_adjusted") + ".srt")
+        srt_candidates = [expected_srt] if expected_srt.exists() else []
+        srt_candidates += [
+            path
+            for path in sorted((project / "exports").glob("*_style_adjusted.srt"))
+            if path not in srt_candidates
+        ]
+        srt_candidates += [
+            path
+            for path in sorted((project / "exports").glob("*_adjusted.srt"))
+            if path not in srt_candidates
+        ]
         if not srt_candidates:
             return {"id": "subtitle_timing", "status": "warn", "detail": "adjusted SRT missing"}
         chunks = parse_srt(srt_candidates[0])

@@ -5512,6 +5512,8 @@ def micro_course_main_formula(title, rest, cards):
     if clean_title == "目录":
         return ""
     if any(keyword in combined for keyword in ("摩擦力", "摩擦", "滑动摩擦", "静摩擦", "正压力", "粗糙")):
+        if any(keyword in combined for keyword in ("基本概念", "概念", "定义", "产生")):
+            return "接触 + 挤压 + 相对运动趋势"
         if any(keyword in combined for keyword in ("静摩擦", "最大静摩擦", "取值范围")):
             return "0 ≤ fs ≤ μsN"
         if any(keyword in combined for keyword in ("公式", "计算", "μ", "正压力", "滑动摩擦")):
@@ -5931,6 +5933,85 @@ def micro_course_formula_lead_text(ctx):
     return lead
 
 
+def is_sparse_formula_detail(text):
+    text = normalize_video_text(text)
+    compact = re.sub(r"[\s：:；;，。,、.]", "", text)
+    sparse_terms = {
+        "补充说明",
+        "例子联想",
+        "条件",
+        "表达",
+        "检验",
+        "定义",
+        "用途",
+        "本页概念",
+    }
+    return visual_text_len(text) < 18 or compact in sparse_terms or compact.endswith("基本概念")
+
+
+def micro_course_formula_fallback_details(ctx, combined):
+    title = normalize_video_text(ctx.get("title", ""))
+    formula = normalize_video_text(ctx.get("formula", ""))
+    if "摩擦" in combined:
+        if any(keyword in combined for keyword in ("公式", "计算", "μ", "正压力", "F =")):
+            return [
+                "适用条件：滑动摩擦常用 F = μN；如果物体还没滑动，先判断静摩擦范围。",
+                "表达含义：μ 看接触面粗糙程度，N 是垂直接触面的正压力，二者共同影响摩擦力大小。",
+                "检验方法：只改变 μ 或 N 中一个量，再比较摩擦力变化，避免把多个变量混在一起。",
+            ]
+        if any(keyword in combined for keyword in ("实验", "探究", "测力计", "数据")):
+            return [
+                "适用条件：匀速拉动时，拉力大小才可以近似等于滑动摩擦力大小。",
+                "表达含义：实验要控制变量，一次只改变接触面粗糙程度或正压力。",
+                "检验方法：记录多组数据，看变化趋势是否稳定，再得出影响因素结论。",
+            ]
+        return [
+            "产生条件：两个物体接触并相互挤压，接触面不完全光滑，还存在相对运动或相对运动趋势。",
+            "表达含义：摩擦力沿接触面产生，方向总是阻碍相对运动或相对运动趋势。",
+            "检验方法：先找接触面，再判断运动趋势，最后区分静摩擦、滑动摩擦或滚动摩擦。",
+        ]
+    if contains_display_formula(formula) or contains_math_notation(formula) or any(keyword in combined for keyword in ("公式", "计算", "法则")):
+        return [
+            "适用条件：先确认公式的使用前提，变量单位、方向和取值范围都要符合题意。",
+            "表达关系：逐一说明每个符号代表什么，区分已知量、未知量和要比较的量。",
+            "检验方法：代入简单数值或回到原题条件，检查结果是否符合限制和常识。",
+        ]
+    if any(keyword in combined for keyword in ("概念", "定义", "含义")):
+        subject = compact_sentence_without_ellipsis(title or "本页概念", 14)
+        return [
+            f"适用条件：先说明{subject}在什么前提下成立，哪些条件缺失时不能直接使用。",
+            "表达含义：把关键词拆成对象、关系和作用三部分，避免只背一句定义。",
+            "检验方法：找一个生活场景或简单例子，检查它是否能解释实际现象。",
+        ]
+    return [
+        "适用条件：先找关键词和限制条件，明确这一页结论在什么情况下成立。",
+        "表达关系：把文字内容整理成对象、变化关系和结论，形成可复述的结构。",
+        "检验方法：用一个例子或反例回看，确认解释不是空泛重复原文。",
+    ]
+
+
+def micro_course_formula_quick_check(ctx):
+    check = normalize_video_text(ctx.get("check", ""))
+    if check and not is_sparse_formula_detail(check):
+        return check
+    title = normalize_video_text(ctx.get("title", ""))
+    formula = normalize_video_text(ctx.get("formula", ""))
+    combined = " ".join([title, formula, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if "摩擦" in combined:
+        if any(keyword in combined for keyword in ("公式", "计算", "μ", "正压力", "F =")):
+            return "同一木块上加重物时 N 变大，若接触面不变，滑动摩擦力通常随之增大。"
+        if any(keyword in combined for keyword in ("实验", "探究", "测力计", "数据")):
+            return "同一木块匀速拉动，先换粗糙面，再加重物，分别比较测力计读数。"
+        return "以鞋底和地面为例：接触、受压、存在相对运动趋势时，摩擦力才会出现。"
+    if ctx.get("examples"):
+        example = normalize_video_text(ctx["examples"][0])
+        if example and not is_sparse_formula_detail(example):
+            return example
+    if contains_display_formula(formula) or contains_math_notation(formula):
+        return "选一个简单数值代入，检查公式两边是否一致，并确认限制条件没有遗漏。"
+    return "用一个具体场景回看：条件是否满足、表达是否清楚、结论是否合理。"
+
+
 def micro_course_formula_card_details(ctx):
     title = normalize_video_text(ctx.get("title", ""))
     formula = normalize_video_text(ctx.get("formula", ""))
@@ -5998,13 +6079,18 @@ def micro_course_formula_card_details(ctx):
         cleaned.append(compact_sentence_without_ellipsis(point, 46))
         if len(cleaned) >= 3:
             break
-    fallbacks = [
-        "先确认公式适用范围，条件不成立就不能直接套用。",
-        "把文字量翻译成符号，分清已知量、未知量和要比较的量。",
-        "代入简单数或回到原题检查，防止把限制条件漏掉。",
-    ]
-    cleaned.extend(fallbacks[len(cleaned):])
-    return cleaned[:3]
+    fallbacks = micro_course_formula_fallback_details(ctx, combined)
+    expanded = []
+    for idx in range(3):
+        item = cleaned[idx] if idx < len(cleaned) else ""
+        fallback = fallbacks[idx] if idx < len(fallbacks) else ""
+        if not item or is_sparse_formula_detail(item):
+            expanded.append(fallback)
+        elif visual_text_len(item) < 28 and fallback:
+            expanded.append(f"{item}：{fallback}")
+        else:
+            expanded.append(item)
+    return expanded[:3]
 
 
 def micro_course_explain_line(title, rest, cards, limit=68):
@@ -6675,7 +6761,9 @@ def layout_micro_course_opener(ctx, slide_data, slide_num, duration, project=Non
 
 def layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
-    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "先抓条件，再看公式怎么用", 0.12)
+    combined = " ".join([normalize_video_text(ctx.get("title", "")), normalize_video_text(ctx.get("formula", "")), *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    header_note = "先抓条件，再看公式怎么用" if any(keyword in combined for keyword in ("公式", "计算", "法则", "方程", "函数", "不等式")) else "先抓条件，再看怎么判断"
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], header_note, 0.12)
     lead_text = micro_course_formula_lead_text(ctx)
     current, layer_num = add_bounded_text(filters, current, layer_num, lead_text, x=110, y=210, width=710, height=104, max_font=28, min_font=19, color="#111827", start=0.38)
     current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, ctx["formula"], x=940, y=225, width=760, height=245, start=0.50, accent="#2563eb")
@@ -6683,14 +6771,14 @@ def layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, proje
     point_source = micro_course_formula_card_details(ctx)
     for idx, label in enumerate(labels):
         x = 175 + idx * 520
-        y = 575
+        y = 545
         accent = ["#2563eb", "#16a34a", "#f59e0b"][idx]
-        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 430, 168), f"{accent}@0.11", 28, 0.72 + idx * 0.08)
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, 430, 230), f"{accent}@0.11", 28, 0.72 + idx * 0.08)
         current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 32, y=y + 24, font_size=28, color=accent, bold=True, start=0.78 + idx * 0.08)
-        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point_source[idx] if idx < len(point_source) else label, x=x + 32, y=y + 64, width=365, height=82, max_font=22, min_font=14, color="#0f172a", bold=True, start=0.84 + idx * 0.08)
-    if ctx["examples"]:
-        current, layer_num = add_filter_roundrect(filters, current, layer_num, (340, 835, 1240, 70), "#f5f3ff@0.92", 22, 1.02)
-        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"快速检验：{ctx.get('check') or ctx['examples'][0]}", x=390, y=846, width=1140, height=48, max_font=26, min_font=18, color="#5b21b6", bold=True, start=1.08)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point_source[idx] if idx < len(point_source) else label, x=x + 32, y=y + 70, width=366, height=132, max_font=21, min_font=14, color="#0f172a", bold=True, start=0.84 + idx * 0.08)
+    check_text = micro_course_formula_quick_check(ctx)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (340, 835, 1240, 70), "#f5f3ff@0.92", 22, 1.02)
+    current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"快速检验：{check_text}", x=390, y=846, width=1140, height=48, max_font=26, min_font=18, color="#5b21b6", bold=True, start=1.08)
     return filters, current, layer_num
 
 

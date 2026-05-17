@@ -61,6 +61,7 @@ from image_sources.provider_common import (  # noqa: E402
     ImageSearchRequest,
     USER_AGENT,
     build_attribution_text,
+    compute_relevance,
     ensure_json_parent,
     score_candidate,
 )
@@ -384,6 +385,7 @@ def _candidate_to_manifest_item(
         "attribution_required": candidate.license_tier == "attribution-required",
         "width": width,
         "height": height,
+        "metadata_relevance": round(compute_relevance(candidate, args.query), 3),
         "attribution_text": build_attribution_text(args.filename, candidate),
         "status": "sourced",
     }

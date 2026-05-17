@@ -16,6 +16,17 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
+try:
+    from subject_framework import (
+        framework_component_score,
+        framework_for_slide,
+        project_subject_profile,
+    )
+except Exception:  # pragma: no cover - keep legacy fallback usable as a script
+    framework_component_score = None
+    framework_for_slide = None
+    project_subject_profile = None
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
@@ -295,6 +306,35 @@ def slide_text(slide: Dict[str, Any]) -> str:
     return "\n".join(part for part in parts if part and not is_source_asset_reference(str(part)))
 
 
+def slide_subject_framework(slide: Dict[str, Any]) -> Dict[str, Any]:
+    if framework_for_slide is None:
+        return {}
+    rest: list[str] = []
+    rest.extend(str(item) for item in slide.get("bullets", []) if item)
+    rest.extend(str(item) for item in slide.get("paragraphs", []) if item)
+    rest.extend(str(item) for item in slide.get("source_paragraphs", []) if item)
+    if not rest:
+        rest.extend(str(block.get("text", "")) for block in slide.get("text_blocks", [])[:20])
+    return framework_for_slide(
+        str(slide.get("title") or slide.get("source_title") or ""),
+        rest,
+        int(slide.get("slide_number", 0) or 0),
+        slide.get("layout", {}),
+    )
+
+
+def catalog_has_component(component_id: str) -> bool:
+    return any(component["id"] == component_id for component in COMPONENT_CATALOG)
+
+
+def first_framework_component(framework: Dict[str, Any], exclude: set[str] | None = None) -> str:
+    exclude = exclude or set()
+    for component_id in framework.get("component_pool", []):
+        if component_id not in exclude and catalog_has_component(component_id):
+            return component_id
+    return ""
+
+
 def component_score(slide: Dict[str, Any], component_id: str) -> float:
     text = slide_text(slide)
     layout = slide.get("layout", {})
@@ -304,6 +344,15 @@ def component_score(slide: Dict[str, Any], component_id: str) -> float:
     bullets = slide.get("bullets", [])
     page_type = layout.get("page_type", "")
     digit_count = len(re.findall(r"\d", text))
+    framework = slide_subject_framework(slide)
+    framework_score = (
+        framework_component_score(framework, component_id)
+        if framework and framework.get("subject") != "general" and framework_component_score
+        else 0.0
+    )
+
+    if component_id != "preserve_slide" and framework_score >= 0.75:
+        return framework_score
 
     if component_id == "preserve_slide":
         return 0.55 + density * 0.25 + (0.15 if slide.get("source") == "ocr" else 0)
@@ -400,16 +449,35 @@ def top_components(slide: Dict[str, Any], limit: int = 3) -> List[Dict[str, Any]
 
 def rule_based_recommendation(slide: Dict[str, Any]) -> Dict[str, Any]:
     primary = next(item for item in COMPONENT_CATALOG if item["id"] == "preserve_slide")
-    visual_effect = fallback_visual_effect(slide)
+    framework = slide_subject_framework(slide)
+    framework_effect = first_framework_component(framework) if framework.get("subject") != "general" else ""
+    visual_effect = framework_effect or fallback_visual_effect(slide)
     ranked = top_components(slide, limit=6)
+    framework_alternatives = [
+        component_id for component_id in framework.get("component_pool", [])
+        if component_id not in {"preserve_slide", visual_effect} and catalog_has_component(component_id)
+    ]
     alternatives = [
-        item["id"] for item in ranked
-        if item["id"] not in {"preserve_slide", visual_effect}
+        *framework_alternatives,
+        *[item["id"] for item in ranked]
+    ]
+    alternatives = [
+        item for idx, item in enumerate(alternatives)
+        if item not in {"preserve_slide", visual_effect} and item not in alternatives[:idx]
     ][:4]
     effect_component = next(
         (item for item in COMPONENT_CATALOG if item["id"] == visual_effect),
         {"id": visual_effect, "name": visual_effect},
     )
+    reason = (
+        "Rules fallback chooses a subject-aware recomposed component, while keeping original slide art "
+        "available only as a supporting reference."
+    )
+    if framework:
+        reason += (
+            f" Framework={framework.get('subject_label', framework.get('subject'))}/"
+            f"{framework.get('scene')}, image_policy={framework.get('image_policy')}."
+        )
     return {
         "slide_number": slide["slide_number"],
         "source": slide.get("source", "unknown"),
@@ -417,11 +485,12 @@ def rule_based_recommendation(slide: Dict[str, Any]) -> Dict[str, Any]:
         "primary_component": "preserve_slide",
         "alternatives": [visual_effect] + alternatives,
         "confidence": 0.92,
-        "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+        "reason": reason,
         "render_strategy": {
             "base": "recompose_component",
             "visual_effect": visual_effect,
             "effect_component": visual_effect,
+            "subject_framework": framework,
             "subtitle_layout": "reserve",
             "duration_multiplier": 1.0,
             "transition": "fade",
@@ -452,6 +521,10 @@ def diversify_recommendations(recommendations: List[Dict[str, Any]], slides: Lis
         "rounded_step_cards",
         "radial_concept_map",
         "three_card_summary",
+        "magazine_spread",
+        "quote_focus",
+        "split_text_visual",
+        "application_storyboard",
     }
     application_keywords = (
         "\u5e94\u7528",
@@ -475,6 +548,32 @@ def diversify_recommendations(recommendations: List[Dict[str, Any]], slides: Lis
             run_length = 1
 
         should_diversify = run_length >= 2 and effect in repeated_effects
+        framework = strategy.get("subject_framework") or slide_subject_framework(slide)
+        if should_diversify and framework.get("subject") not in {"", None, "general"}:
+            pool = [
+                component_id for component_id in framework.get("component_pool", [])
+                if component_id != effect and catalog_has_component(component_id)
+            ]
+            if pool:
+                candidate = pool[(slide_number + run_length) % len(pool)]
+                strategy["visual_effect"] = candidate
+                strategy["effect_component"] = candidate
+                strategy["subject_framework"] = framework
+                item["alternatives"] = [candidate] + [
+                    alt for alt in item.get("alternatives", []) if alt != candidate
+                ][:4]
+                item["reason"] = (
+                    f"{item.get('reason', '')} Diversified adjacent "
+                    f"{framework.get('subject')} pages with {candidate}."
+                )
+                effect_component = next(
+                    (component for component in COMPONENT_CATALOG if component["id"] == candidate),
+                    {"id": candidate, "name": candidate},
+                )
+                item["effect_component"] = effect_component
+                effect = candidate
+                run_length = 1
+
         if should_diversify and MATH_RE.search(text):
             cycle_index = max(0, slide_number - 1) % len(math_cycle)
             candidate = math_cycle[cycle_index]
@@ -581,6 +680,7 @@ def merge_source_text(project_path: Path, slides: List[Dict[str, Any]]) -> List[
 def build_llm_payload(project_path: Path, slides: List[Dict[str, Any]]) -> Dict[str, Any]:
     compact_slides = []
     for slide in slides:
+        framework = slide_subject_framework(slide)
         compact_slides.append(
             {
                 "slide_number": slide.get("slide_number"),
@@ -598,12 +698,15 @@ def build_llm_payload(project_path: Path, slides: List[Dict[str, Any]]) -> Dict[
                     }
                     for block in slide.get("text_blocks", [])[:30]
                 ],
+                "subject_framework": framework,
             }
         )
 
+    project_framework = project_subject_profile(slides) if project_subject_profile else {}
     return {
         "task": "Choose video layout/components for each PPT slide.",
         "project": project_path.name,
+        "project_subject_framework": project_framework,
         "component_catalog": COMPONENT_CATALOG,
         "slides": compact_slides,
         "output_schema": {
@@ -618,6 +721,7 @@ def build_llm_payload(project_path: Path, slides: List[Dict[str, Any]]) -> Dict[
                 "subtitle_layout": "reserve or overlay",
                 "duration_multiplier": "number",
                 "transition": "fade/push/none",
+                "subject_framework": "copy or refine the provided subject_framework for this slide",
             },
         },
     }
@@ -632,6 +736,7 @@ def write_prompt(project_path: Path, payload: Dict[str, Any]) -> Path:
         "Use the provided component_catalog only. Preserve the original slide when OCR shows",
         "a dense or already well-designed layout. Choose recomposed components only when they",
         "clearly improve comprehension in video.",
+        "Use subject_framework to vary components, visual density, background tone, and image strategy by subject and scene.",
         "",
         "Return strict JSON: an array of slide recommendation objects matching output_schema.",
         "",

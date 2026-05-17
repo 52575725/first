@@ -17,10 +17,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from functools import lru_cache
 
+try:
+    from subject_framework import framework_for_slide
+except Exception:  # pragma: no cover - allow legacy standalone rendering
+    framework_for_slide = None
+
+try:
+    from subject_backgrounds import background_layers_for_framework
+except Exception:  # pragma: no cover - allow legacy standalone rendering
+    background_layers_for_framework = None
+
 
 VIDEO_W = 1920
 VIDEO_H = 1080
 MIN_SEGMENT_BYTES = 32 * 1024
+SUBTITLE_AUDIO_LEAD_SECONDS = 0.32
 RENDER_CONTEXT = threading.local()
 
 
@@ -2221,12 +2232,81 @@ def source_slide_art(project, slide_num):
     return best or fallback
 
 
+def micro_course_framework(title="", rest=None, slide_num=0, slide_data=None):
+    if framework_for_slide is None:
+        return {}
+    rest_items = list(rest or [])
+    detected_title = title or ""
+    if slide_data and isinstance(slide_data, dict):
+        detected_title = detected_title or slide_data.get("title") or slide_data.get("source_title") or ""
+        if not rest_items:
+            rest_items.extend(slide_data.get("bullets") or [])
+            rest_items.extend(slide_data.get("paragraphs") or [])
+            rest_items.extend(slide_data.get("source_paragraphs") or [])
+            rest_items.extend(
+                block.get("text", "")
+                for block in (slide_data.get("text_blocks") or [])[:20]
+                if isinstance(block, dict)
+            )
+    rest_items = [normalize_video_text(item) for item in rest_items if normalize_video_text(item)]
+    return framework_for_slide(normalize_video_text(detected_title), rest_items, slide_num)
+
+
 def micro_course_should_use_image(title="", rest=None, slide_num=0, path=None):
+    framework = micro_course_framework(title, rest, slide_num)
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in (rest or [])]])
+    if any(marker in combined for marker in ("目录", "感谢观看", "谢谢观看")):
+        return False
+    policy = framework.get("image_policy", "optional")
+    family = framework.get("family", "general")
+    scene = framework.get("scene", "concept")
+    if policy in {"required", "prefer"}:
+        return True
+    if family == "humanities" and scene not in {"summary"} and len(combined) >= 18:
+        return True
+    if family == "stem" and scene in {"formula", "derivation", "exercise", "experiment", "case", "process"}:
+        return True
     return False
 
 
 def micro_course_visual_asset(project, slide_num, slide_data=None, title=None, rest=None):
+    framework = micro_course_framework(title or "", rest or [], slide_num, slide_data)
+    if title is None or rest is None:
+        if slide_data and isinstance(slide_data, dict):
+            title = title or slide_data.get("title") or slide_data.get("source_title") or ""
+            inferred_rest = []
+            inferred_rest.extend(slide_data.get("bullets") or [])
+            inferred_rest.extend(slide_data.get("paragraphs") or [])
+            inferred_rest.extend(slide_data.get("source_paragraphs") or [])
+            rest = inferred_rest
+        else:
+            rest = rest or []
+    if not micro_course_should_use_image(title or "", rest or [], slide_num):
+        return None
+    asset = slide_visual_asset(project, slide_num)
+    if asset:
+        return asset
+    if framework.get("asset_mode") == "formula_render":
+        return None
+    if framework.get("image_policy") in {"required", "prefer"}:
+        return source_slide_art(project, slide_num)
     return None
+
+
+def micro_course_theme(title="", rest=None, slide_num=0, slide_data=None, project=None):
+    framework = micro_course_framework(title, rest, slide_num, slide_data)
+    theme = framework.get("theme") or {}
+    if theme:
+        return framework, theme
+    base = project_theme(project)
+    return framework, {
+        "background": base.get("background", "#f7f8fa"),
+        "accent": base.get("accent", "#2563eb"),
+        "accent_2": "#16a34a",
+        "soft": "#dbeafe@0.24",
+        "soft_2": "#dcfce7@0.18",
+        "text": base.get("text", "#101828"),
+    }
 
 
 def slide_art_asset(project, slide_num):
@@ -2303,12 +2383,14 @@ def add_filter_visual_cover(
     box,
     opacity=1.0,
     start=0.0,
+    input_index=None,
 ):
     """Overlay the slide visual input into a fixed box using cover-fit cropping."""
     x, y, w, h = box
     image_label = f"img{layer_num}"
+    source_index = 0 if input_index is None else int(input_index)
     filters.append(
-        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+        f"[{source_index}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
         f"crop={w}:{h},format=rgba,colorchannelmixer=aa={opacity:.3f}[{image_label}]"
     )
     filters.append(
@@ -2326,12 +2408,14 @@ def add_filter_visual_contain(
     box,
     opacity=1.0,
     start=0.0,
+    input_index=None,
 ):
     """Overlay the slide visual input into a fixed box without cropping."""
     x, y, w, h = box
     image_label = f"img{layer_num}"
+    source_index = 0 if input_index is None else int(input_index)
     filters.append(
-        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        f"[{source_index}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
         f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=white@0.0,"
         f"format=rgba,colorchannelmixer=aa={opacity:.3f}[{image_label}]"
     )
@@ -3752,6 +3836,8 @@ def augment_teaching_cards(title, rest, cards, limit=4):
         return cards[:limit]
 
     topic = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    framework = micro_course_framework(title, rest, 0) or {}
+    subject = framework.get("subject", "general")
     supplements = []
     if "根号" in topic or "平方根" in topic or "√" in topic:
         supplements.extend([
@@ -3766,6 +3852,8 @@ def augment_teaching_cards(title, rest, cards, limit=4):
             {"title": "例题提示", "subtitle": "逐步验证", "body": "每变形一步都要检查是否改变定义域或解集。"},
             {"title": "易错提醒", "subtitle": "条件不丢", "body": "含分母、根号或平方运算时，要额外检查限制条件。"},
         ])
+    elif subject not in {"", None, "general"}:
+        supplements.extend(subject_sparse_supplements(title, rest, topic, limit=limit))
     else:
         supplements.extend([
             {"title": "补充说明", "subtitle": "换句话说", "body": "把本页概念拆成定义、条件和用途三个层次来理解。"},
@@ -3826,6 +3914,71 @@ def is_duplicate_enrichment(candidate_key, existing_keys):
         if len(candidate_key) >= 14 and len(key) >= 14 and (candidate_key in key or key in candidate_key):
             return True
     return False
+
+
+def subject_sparse_supplements(title, rest, topic, limit=4):
+    framework = micro_course_framework(title, rest, 0) or {}
+    subject = framework.get("subject", "general")
+    family = framework.get("family", "general")
+    topic = normalize_video_text(topic)
+
+    if subject == "literature" or family == "humanities" and any(key in topic for key in ("文本", "课文", "情感", "人物", "作者", "意象")):
+        if any(key in topic for key in ("母亲", "人物", "形象")):
+            cards = [
+                {"title": "人物动作", "subtitle": "先找原文", "body": "把人物的动作、神态和语言圈出来，先说明她做了什么。"},
+                {"title": "情感变化", "subtitle": "再看转折", "body": "从动作背后的担心、忍耐或牵挂，推出人物情感的变化。"},
+                {"title": "主题联系", "subtitle": "回到主旨", "body": "把人物放回生命体验和亲情主题中，避免只停留在情节复述。"},
+                {"title": "表达迁移", "subtitle": "可写可说", "body": "回答时用“细节定位 + 表达效果 + 主题意义”的句式组织。"},
+            ]
+        elif any(key in topic for key in ("地坛", "生命", "环境", "景物")):
+            cards = [
+                {"title": "环境线索", "subtitle": "空间不是背景", "body": "先看地坛、季节、景物怎样承载人物的心理状态。"},
+                {"title": "细节证据", "subtitle": "原文支撑", "body": "选择一个具体景物或动作，说明它和情感变化之间的关系。"},
+                {"title": "主题推进", "subtitle": "由景入情", "body": "从环境描写推进到生命思考，讲清楚作者为什么这样写。"},
+                {"title": "答题结构", "subtitle": "三步表达", "body": "定位句子，概括画面，再指出它对主题或人物形象的作用。"},
+            ]
+        else:
+            cards = [
+                {"title": "文本证据", "subtitle": "不要空讲", "body": "先回到原文关键词、句子或段落，给观点找到依据。"},
+                {"title": "解释推进", "subtitle": "讲出为什么", "body": "把句子意思、表达效果和情感指向连起来说明。"},
+                {"title": "观点归纳", "subtitle": "形成结论", "body": "用一句完整判断收束：这一细节表现了什么，服务什么主题。"},
+                {"title": "迁移表达", "subtitle": "可用于答题", "body": "按照“原文细节 + 表达效果 + 情感主题”的顺序复述。"},
+            ]
+        return cards[:limit]
+
+    if subject == "history":
+        return [
+            {"title": "时代背景", "subtitle": "先定坐标", "body": "把时间、地点和主要矛盾说清楚，避免孤立看事件。"},
+            {"title": "原因链条", "subtitle": "多因一果", "body": "区分直接原因、根本原因和推动条件，形成因果链。"},
+            {"title": "过程节点", "subtitle": "抓转折", "body": "找出关键人物、事件和转折点，再说明它们改变了什么。"},
+            {"title": "影响评价", "subtitle": "回到意义", "body": "从政治、经济、社会或思想层面概括影响。"},
+        ][:limit]
+
+    if subject == "geography":
+        return [
+            {"title": "空间定位", "subtitle": "先看哪里", "body": "先确定区域位置、经纬度或地形单元，再读图判断。"},
+            {"title": "分布特征", "subtitle": "描述规律", "body": "用方向、疏密、高低、多少等词概括图上分布。"},
+            {"title": "成因分析", "subtitle": "自然加人文", "body": "把气候、地形、水文和人类活动分开解释。"},
+            {"title": "图像判读", "subtitle": "证据落点", "body": "每个结论最好能回到图例、坐标、等值线或数据。"},
+        ][:limit]
+
+    if subject == "physics" or "摩擦" in topic:
+        return [
+            {"title": "产生条件", "subtitle": "先判现象", "body": "接触、挤压、接触面不光滑，并存在相对运动或运动趋势。"},
+            {"title": "方向判断", "subtitle": "看相对运动", "body": "摩擦力沿接触面，方向总是阻碍相对运动或相对运动趋势。"},
+            {"title": "实验解释", "subtitle": "控制变量", "body": "一次只改变粗糙程度或正压力，比较测力计读数变化。"},
+            {"title": "生活例子", "subtitle": "落到场景", "body": "鞋底花纹、轮胎抓地、轴承润滑都能对应增大或减小摩擦。"},
+        ][:limit]
+
+    if subject == "business":
+        return [
+            {"title": "用户场景", "subtitle": "谁遇到问题", "body": "先说明目标用户、使用场景和真实痛点。"},
+            {"title": "数据证据", "subtitle": "为什么成立", "body": "用市场规模、成本、效率或案例数据支撑判断。"},
+            {"title": "方案机制", "subtitle": "怎么解决", "body": "把产品、流程、资源和收益路径串成闭环。"},
+            {"title": "落地风险", "subtitle": "提前说明", "body": "补充成本、合规、供应链或推广风险，并给出应对办法。"},
+        ][:limit]
+
+    return []
 
 
 def left_enrichment_items(title, rest, cards, limit=3):
@@ -5600,6 +5753,9 @@ def micro_course_main_formula(title, rest, cards):
 
 def micro_course_topic_kind(title, rest, cards, project=None, slide_num=0):
     combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    framework = micro_course_framework(title, rest, slide_num)
+    family = framework.get("family", "general")
+    scene = framework.get("scene", "concept")
     has_image = micro_course_visual_asset(project, slide_num, title=title, rest=rest) is not None
     formula = micro_course_main_formula(title, rest, cards)
     if slide_num == 1:
@@ -5607,11 +5763,22 @@ def micro_course_topic_kind(title, rest, cards, project=None, slide_num=0):
     real_example = any(keyword in combined for keyword in ("举例", "例题", "计算", "求解", "化简", "方程", "不等式"))
     if any(keyword in combined for keyword in ("目录", "感谢观看")):
         return "concept"
+    if framework.get("subject") != "general":
+        if scene in {"quote_analysis", "close_reading", "character_analysis", "formula", "derivation"}:
+            return "formula"
+        if scene in {"exercise"}:
+            return "example"
+        if scene in {"case", "experiment"} or (family == "humanities" and has_image):
+            return "case"
+        if scene in {"summary", "timeline", "compare", "process", "data", "concept", "cover"}:
+            return "concept"
     if any(keyword in combined for keyword in ("性质", "分类", "概念", "进阶知识", "无理数")):
         return "formula"
     if any(keyword in combined for keyword in ("增大有益摩擦", "减小有害摩擦", "鞋底花纹", "轮胎花纹", "润滑油", "轴承", "刹车", "抓地力", "防滑")):
         return "case"
-    if any(keyword in combined for keyword in ("情境", "应用", "观察", "探究", "生活", "案例", "场景", "几何", "物理", "金融")):
+    case_signal = any(keyword in combined for keyword in ("情境", "应用", "观察", "探究", "生活", "案例", "场景", "几何", "物理", "金融"))
+    stem_signal = any(keyword in combined for keyword in ("公式", "计算", "实验", "数据", "函数", "方程", "不等式", "根号", "摩擦", "几何", "物理", "金融", "测力计"))
+    if case_signal and (stem_signal or has_image):
         return "case"
     if real_example and any(keyword in combined for keyword in ("计算", "求解", "化简", "方程", "不等式")):
         return "example"
@@ -5622,15 +5789,194 @@ def micro_course_topic_kind(title, rest, cards, project=None, slide_num=0):
     return "concept"
 
 
-def add_micro_course_header(filters, current, layer_num, title, subtitle, start=0.12):
-    current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, 10), "#1d4ed8", "fill", 0.0)
-    current, layer_num = add_filter_roundrect(filters, current, layer_num, (42, 34, 212, 66), "#1d4ed8", 16, start)
-    current, layer_num = add_soft_circle_token(filters, current, layer_num, 82, 67, 22, "#ffffff", ">", start + 0.03, fill="white@0.96", text_color="#1d4ed8")
-    current, layer_num = add_filter_drawtext(filters, current, layer_num, "微课", x=126, y=50, font_size=30, color="white", bold=True, start=start + 0.06)
-    current, layer_num = add_micro_course_bulb(filters, current, layer_num, 1680, 32, start + 0.04)
-    current, layer_num = add_large_title(filters, current, layer_num, title, x=365, y=30, width=1180, height=82, color="#08215c", start=start + 0.06, max_font=58, min_font=34)
+def micro_course_combined_ctx_text(ctx):
+    return " ".join(
+        normalize_video_text(item)
+        for item in [
+            ctx.get("title", ""),
+            ctx.get("lead", ""),
+            ctx.get("formula", ""),
+            *ctx.get("rest", []),
+            *ctx.get("points", []),
+        ]
+        if normalize_video_text(item)
+    )
+
+
+def micro_course_is_literature_text(text):
+    framework = micro_course_framework(text, [], 0)
+    if framework.get("subject") == "literature":
+        return True
+    return any(
+        keyword in text
+        for keyword in (
+            "语文", "文本", "朗读", "赏析", "修辞", "比喻", "联读",
+            "史铁生", "我与地坛", "地坛", "母亲", "意象", "背影",
+            "车辙", "脚印", "情感", "生命", "写作", "人物", "主题",
+        )
+    )
+
+
+def micro_course_is_stem_text(text):
+    framework = micro_course_framework(text, [], 0)
+    if framework.get("family") == "stem":
+        return True
+    return any(
+        keyword in text
+        for keyword in (
+            "公式", "计算", "函数", "方程", "不等式", "根号", "平方根",
+            "摩擦", "物理", "实验", "数据", "测力计", "变量", "图像",
+            "几何", "金融", "μ", "F =", "N",
+        )
+    )
+
+
+def micro_course_opener_subtitle(ctx):
+    combined = micro_course_combined_ctx_text(ctx)
+    framework = ctx.get("framework") or micro_course_framework(combined, [], 0)
+    subject = framework.get("subject")
+    if subject == "history":
+        return "史料脉络 / 关键转折 / 影响归纳"
+    if subject == "geography":
+        return "空间分布 / 成因分析 / 图像判读"
+    if subject == "politics":
+        return "概念边界 / 材料分析 / 观点表达"
+    if subject == "physics":
+        return "现象观察 / 模型建构 / 应用判断"
+    if subject == "chemistry":
+        return "反应现象 / 微观解释 / 实验判断"
+    if subject == "biology":
+        return "结构观察 / 过程机制 / 生命联系"
+    if micro_course_is_literature_text(combined):
+        return "文本细读 / 情感线索 / 表达迁移"
+    if "摩擦" in combined:
+        return "概念建模 / 受力判断 / 场景应用"
+    if micro_course_is_stem_text(combined):
+        return "简明精讲 / 规则理解 / 例题应用"
+    return "重点梳理 / 关系解释 / 场景应用"
+
+
+def micro_course_opener_path(ctx):
+    combined = micro_course_combined_ctx_text(ctx)
+    framework = ctx.get("framework") or micro_course_framework(combined, [], 0)
+    labels = framework.get("labels") or {}
+    if labels.get("path") and framework.get("subject") not in {"", None, "general"}:
+        return labels["path"]
+    if micro_course_is_literature_text(combined):
+        return "学习路径：文本线索 / 细节赏析 / 情感理解 / 表达迁移。"
+    if "摩擦" in combined:
+        return "学习路径：产生条件 / 类型判断 / 方向分析 / 生活应用。"
+    if micro_course_is_stem_text(combined):
+        return "学习路径：符号含义 / 适用条件 / 方法步骤 / 题目检验。"
+    return "学习路径：核心对象 / 关键关系 / 示例说明 / 总结迁移。"
+
+
+def is_generic_micro_card_title(text):
+    return normalize_video_text(text) in {
+        "核心要点", "组织方式", "关键价值", "补充说明", "例子联想", "速记提示",
+        "要点1", "要点2", "要点3", "要点4", "要点5",
+    }
+
+
+def add_micro_course_header(filters, current, layer_num, title, subtitle, start=0.12, framework=None):
+    framework = framework or {}
+    theme = framework.get("theme") or {}
+    subject = framework.get("subject", "general")
+    family = framework.get("family", "general")
+    accent = theme.get("accent", "#1d4ed8")
+    accent_2 = theme.get("accent_2", "#0f766e")
+    text_color = theme.get("text", "#08215c")
+    labels = {
+        "literature": ("文本细读", "文"),
+        "history": ("史料研读", "史"),
+        "politics": ("材料辨析", "法"),
+        "geography": ("图像判读", "图"),
+        "math": ("公式推演", "√"),
+        "physics": ("受力模型", "F"),
+        "chemistry": ("实验解释", "H"),
+        "biology": ("结构机制", "胞"),
+        "computer": ("算法拆解", "{ }"),
+        "business": ("方案拆解", "策"),
+    }
+    label, token = labels.get(subject, ("重点讲解", "·"))
+    current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, 10), accent, "fill", 0.0)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (42, 34, 245, 66), accent, 18 if family == "humanities" else 14, start)
+    current, layer_num = add_soft_circle_token(
+        filters, current, layer_num, 82, 67, 22, "#ffffff", token,
+        start + 0.03, fill="white@0.96", text_color=accent
+    )
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=126, y=50, font_size=28, color="white", bold=True, start=start + 0.06)
+    if family == "humanities":
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (1668, 40, 96, 54), f"{accent}@0.14", 12, start + 0.04)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (1690, 55, 52, 4), accent_2, "fill", start + 0.08)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (1690, 72, 52, 4), f"{accent}@0.70", "fill", start + 0.10)
+    elif family == "stem":
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (1658, 38, 118, 58), f"{accent}@0.12", 12, start + 0.04)
+        current, layer_num = add_filter_drawtext(filters, current, layer_num, token, x=1700, y=54, font_size=28, color=accent, bold=True, start=start + 0.08)
+    else:
+        current, layer_num = add_micro_course_bulb(filters, current, layer_num, 1680, 32, start + 0.04)
+    current, layer_num = add_large_title(filters, current, layer_num, title, x=365, y=30, width=1180, height=82, color=text_color, start=start + 0.06, max_font=58, min_font=34)
     if subtitle:
-        current, layer_num = add_bounded_text(filters, current, layer_num, subtitle, x=520, y=120, width=880, height=36, max_font=26, min_font=18, color="#172554", start=start + 0.14)
+        current, layer_num = add_bounded_text(filters, current, layer_num, subtitle, x=520, y=120, width=880, height=36, max_font=26, min_font=18, color=text_color, start=start + 0.14)
+    return current, layer_num
+
+
+def slide_background_decor_asset(project, slide_num):
+    if not project:
+        return None
+    decor_dir = project / "images" / "background_decor"
+    for suffix in ("background", "decor", "texture"):
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            path = decor_dir / f"slide_{slide_num:02d}_{suffix}{ext}"
+            if path.exists() and path.stat().st_size > 40_000:
+                return path
+    return None
+
+
+def add_filter_background_decor(filters, current, layer_num, *, opacity=0.18, start=0.0):
+    input_index = getattr(RENDER_CONTEXT, "background_decor_input_index", None)
+    if input_index is None:
+        return current, layer_num
+    return add_filter_visual_cover(
+        filters,
+        current,
+        layer_num,
+        box=(0, 0, VIDEO_W, VIDEO_H),
+        opacity=opacity,
+        start=start,
+        input_index=input_index,
+    )
+
+
+def add_filter_background_edge_decor(filters, current, layer_num, *, opacity=0.12, start=0.0, variant=0):
+    input_index = getattr(RENDER_CONTEXT, "background_decor_input_index", None)
+    if input_index is None:
+        return current, layer_num
+    variant = int(variant or 0) % 4
+    edge_sets = [
+        [
+            (0, 180, 320, 430, 0.82),
+        ],
+        [
+            (1580, 118, 340, 300, 0.82),
+        ],
+        [
+            (0, 650, 340, 270, 0.78),
+        ],
+        [
+            (1580, 700, 340, 230, 0.78),
+        ],
+    ]
+    for x, y, w, h, weight in edge_sets[variant]:
+        current, layer_num = add_filter_visual_cover(
+            filters,
+            current,
+            layer_num,
+            box=(x, y, w, h),
+            opacity=opacity * weight,
+            start=start,
+            input_index=input_index,
+        )
     return current, layer_num
 
 
@@ -5838,9 +6184,21 @@ def micro_course_core_points(title, rest, cards, limit=3):
     specific = micro_course_specific_points(title, rest, limit)
     if specific:
         return specific
+    combined = " ".join([normalize_video_text(title), *[normalize_video_text(line) for line in rest]])
+    if micro_course_is_literature_text(combined):
+        points = []
+        for line in rest:
+            item = compact_sentence_without_ellipsis(line, 38)
+            if item and not any(enrichment_fingerprint(item) == enrichment_fingerprint(existing) for existing in points):
+                points.append(item)
+            if len(points) >= limit:
+                return points[:limit]
     points = []
     for card in cards:
-        item = compact_sentence_without_ellipsis(card.get("title") or card.get("body") or "", 24)
+        title = normalize_video_text(card.get("title", ""))
+        body = normalize_video_text(card.get("body", ""))
+        source = body if is_generic_micro_card_title(title) and body else (title or body)
+        item = compact_sentence_without_ellipsis(source, 34)
         if item:
             points.append(item)
     if len(points) < limit:
@@ -5851,7 +6209,7 @@ def micro_course_core_points(title, rest, cards, limit=3):
             if len(points) >= limit:
                 break
     if not points:
-        points = ["先抓关键词", "再看限制条件", "最后用例子检验"]
+        points = ["先抓核心对象", "再看前后关系", "最后回到材料验证"]
     return points[:limit]
 
 
@@ -6007,6 +6365,24 @@ def micro_course_formula_quick_check(ctx):
         example = normalize_video_text(ctx["examples"][0])
         if example and not is_sparse_formula_detail(example):
             return example
+    if micro_course_is_literature_text(combined):
+        if "学习目标" in combined:
+            return "能否用原文细节证明自己的判断，是这一课最重要的检查点。"
+        if "文本线索" in combined or "线索地图" in combined:
+            return "看两条线索是否能互相照应：地坛写自我，母亲写亲情。"
+        if "母亲形象" in combined:
+            return "每个评价都要落回动作、神态或叙述语气，不能只写“伟大”。"
+        if "情感变化" in combined:
+            return "判断情感变化时，要说清起点、转折和最终理解。"
+        if "联读" in combined or "秋天的怀念" in combined:
+            return "联读不是比情节，而是比较同一主题下的不同表达。"
+        if "合作探究" in combined:
+            return "小组答案先给证据，再解释效果，最后形成结论。"
+        if "拓展表达" in combined:
+            return "补写句子先看前后语意，再看语气是否和原文一致。"
+        if "总结" in combined:
+            return "以后分析散文，按线索、细节、主题三步回看。"
+        return "回到原文细节：定位是否准确，表达是否清楚，主题判断是否有依据。"
     if contains_display_formula(formula) or contains_math_notation(formula):
         return "选一个简单数值代入，检查公式两边是否一致，并确认限制条件没有遗漏。"
     return "用一个具体场景回看：条件是否满足、表达是否清楚、结论是否合理。"
@@ -6016,6 +6392,12 @@ def micro_course_point_fallback_details(ctx):
     title = normalize_video_text(ctx.get("title", ""))
     formula = normalize_video_text(ctx.get("formula", ""))
     combined = " ".join([title, formula, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if micro_course_is_literature_text(combined):
+        return [
+            "文本定位：先找意象、动作或关键词，明确这一页围绕哪个文本细节展开。",
+            "情感分析：说明人物的心理变化，避免只把原文换一种说法复述。",
+            "主题迁移：把细节放回生命、亲情或写作主题中，形成可表达的结论。",
+        ]
     if "摩擦" in combined:
         if any(keyword in combined for keyword in ("实验", "探究", "数据", "距离", "速度", "测力计", "表格")):
             return [
@@ -6062,14 +6444,20 @@ def micro_course_point_fallback_details(ctx):
 def micro_course_enriched_points(ctx, limit=3):
     fallbacks = micro_course_point_fallback_details(ctx)
     raw_points = [normalize_video_text(point) for point in ctx.get("points", []) if normalize_video_text(point)]
+    combined = micro_course_combined_ctx_text(ctx)
+    prefer_source_points = micro_course_is_literature_text(combined)
     enriched = []
     seen = set()
     for idx in range(limit):
         point = raw_points[idx] if idx < len(raw_points) else ""
         fallback = fallbacks[idx] if idx < len(fallbacks) else ""
-        if not point or is_sparse_formula_detail(point):
+        if not point:
             text = fallback
-        elif visual_text_len(point) < 28 and fallback:
+        elif is_sparse_formula_detail(point) and not prefer_source_points:
+            text = fallback
+        elif is_sparse_formula_detail(point) and prefer_source_points and visual_text_len(point) < 8:
+            text = fallback
+        elif visual_text_len(point) < 28 and fallback and not prefer_source_points:
             text = fallback
         else:
             text = point
@@ -6091,6 +6479,72 @@ def micro_course_formula_card_details(ctx):
     title = normalize_video_text(ctx.get("title", ""))
     formula = normalize_video_text(ctx.get("formula", ""))
     combined = " ".join([title, formula, *[normalize_video_text(line) for line in ctx.get("rest", [])]])
+    if micro_course_is_literature_text(combined):
+        if "学习目标" in combined:
+            return [
+                "读深：能从词语、动作和意象里找到文本依据。",
+                "说准：不只说感动，要说明细节怎样产生表达效果。",
+                "会迁移：把“定位—分析—归纳”的方法用到新文本。",
+            ]
+        if "文本线索" in combined or "线索地图" in combined:
+            return [
+                "空间线：地坛不是背景板，它推动作者从痛苦走向思考。",
+                "人物线：母亲的等待、担忧和克制，构成另一条情感线。",
+                "主题线：两条线最后汇合到生命理解和亲情反思。",
+            ]
+        if "母亲形象一" in combined:
+            return [
+                "细节定位：母亲担忧却仍尊重儿子，矛盾里藏着克制。",
+                "人物心理：她不是不痛苦，而是把痛苦压在行动背后。",
+                "表达效果：这种不直接诉苦的写法，让母爱更含蓄也更重。",
+            ]
+        if "母亲形象二" in combined:
+            return [
+                "背影细节：远远看着、悄悄等待，比直接劝说更有力量。",
+                "情感层次：母亲的爱不是控制，而是守候和成全。",
+                "主题连接：理解母亲，也就理解作者后来对生命的回望。",
+            ]
+        if "情感变化" in combined:
+            return [
+                "起点：作者最初沉郁、封闭，地坛承接了他的痛苦。",
+                "转折：反复进入地坛后，他开始观察生命和时间。",
+                "结果：情感从逃避走向理解，主题也由个人痛苦走向生命思考。",
+            ]
+        if "秋天的怀念" in combined or "联读" in combined:
+            return [
+                "共通点：两篇文章都从母亲细节进入亲情理解。",
+                "差异点：《我与地坛》更偏回望与反思，《秋天的怀念》更集中写悔悟。",
+                "迁移点：比较阅读时抓同一主题下不同写法，而不是只比情节。",
+            ]
+        if "合作探究" in combined:
+            return [
+                "任务入口：先给观点找原文依据，不能只凭感觉判断。",
+                "小组讨论：把关键词、人物动作和环境描写分开归类。",
+                "汇报表达：用“我找到的细节是……它说明……”组织答案。",
+            ]
+        if "拓展表达" in combined:
+            return [
+                "补写前：先看上下句语意，判断情感方向和句式节奏。",
+                "表达中：尽量沿用原文语气，不突然换成概括口号。",
+                "检查后：读一遍前后文，看是否连贯、含蓄、有依据。",
+            ]
+        if "课堂总结" in combined or "总结" in combined:
+            return [
+                "方法：回到原文细节，用证据支撑观点。",
+                "主题：从地坛、母亲和自我反思看生命理解。",
+                "迁移：以后分析散文，也按线索、细节、主题三步走。",
+            ]
+        if "比喻" in combined:
+            return [
+                "定位：先看句子是否把一个对象说成另一个对象。",
+                "表达：A 句把“蜂儿”比作“小雾”，有本体、喻体和相似点。",
+                "判断：拟人重在动作状态，比喻重在建立相似关系。",
+            ]
+        return [
+            "定位：先找意象、动作或关键词，明确分析对象。",
+            "表达：把细节和人物心理、叙述语气联系起来。",
+            "判断：结论必须能回到原文细节中得到支撑。",
+        ]
     if "分类及特点" in combined or (
         "静摩擦力" in combined and "滑动摩擦力" in combined and "滚动摩擦力" in combined
     ):
@@ -6319,7 +6773,7 @@ def micro_course_teaching_steps(title, rest, cards, formula="", limit=3):
             if len(steps) >= limit:
                 break
     if len(steps) < limit:
-        steps.extend(["先看条件是否成立", "再把文字翻译成符号", "最后代入数字检验"][: limit - len(steps)])
+        steps.extend(["先定位材料中的关键词", "再解释人物、情感或关系", "最后联系主题完成迁移"][: limit - len(steps)])
     return steps[:limit]
 
 
@@ -6380,11 +6834,14 @@ def micro_course_check_example(title, rest, formula="", examples=None):
             example = compact_sentence_without_ellipsis(example, 42)
             if example:
                 return example
-    return compact_sentence_without_ellipsis(formula or "代入具体数字检查条件和结果。", 42)
+    if micro_course_is_literature_text(combined):
+        return "回到原文细节，检查情感分析是否能支撑主题结论。"
+    return compact_sentence_without_ellipsis(formula or "回到具体材料，检查解释是否能支撑结论。", 42)
 
 
 def micro_course_build_context(slide_data, slide_num, project=None):
     title, rest = slide_context(slide_data, slide_num, project)
+    framework = micro_course_framework(title, rest, slide_num, slide_data)
     cards = content_cards_from_lines(rest, limit=5)
     if len(cards) < 2:
         cards = clean_card_data(slide_data, slide_num, project).get("cards", [])[:5]
@@ -6410,6 +6867,7 @@ def micro_course_build_context(slide_data, slide_num, project=None):
         "lead": lead,
         "kind": kind,
         "visual_asset": visual_asset,
+        "framework": framework,
     }
 
 
@@ -6449,16 +6907,110 @@ def add_micro_course_bulb(filters, current, layer_num, x, y, start=0.28):
     return current, layer_num
 
 
+def apply_subject_background_pattern(filters, current, layer_num, framework=None, slide_num=0):
+    if background_layers_for_framework is None:
+        return current, layer_num
+    try:
+        ops = background_layers_for_framework(framework or {}, width=VIDEO_W, height=VIDEO_H, variant=slide_num)
+    except Exception:
+        return current, layer_num
+
+    for op in ops[:120]:
+        kind = op.get("kind")
+        color = op.get("color", "#94a3b8@0.08")
+        start = float(op.get("start", 0.0) or 0.0)
+        try:
+            if kind == "rect":
+                current, layer_num = add_filter_drawbox(
+                    filters, current, layer_num, tuple(op.get("box", (0, 0, 1, 1))), color, "fill", start
+                )
+            elif kind == "roundrect":
+                current, layer_num = add_filter_roundrect(
+                    filters,
+                    current,
+                    layer_num,
+                    tuple(op.get("box", (0, 0, 1, 1))),
+                    color,
+                    int(op.get("radius", 16) or 16),
+                    start,
+                )
+            elif kind == "circle":
+                current, layer_num = add_filter_circle(
+                    filters,
+                    current,
+                    layer_num,
+                    int(op.get("cx", 0) or 0),
+                    int(op.get("cy", 0) or 0),
+                    int(op.get("radius", 1) or 1),
+                    color,
+                    start,
+                )
+            elif kind == "line":
+                current, layer_num = add_filter_axis_line(
+                    filters,
+                    current,
+                    layer_num,
+                    int(op.get("x1", 0) or 0),
+                    int(op.get("y1", 0) or 0),
+                    int(op.get("x2", 0) or 0),
+                    int(op.get("y2", 0) or 0),
+                    color,
+                    int(op.get("thickness", 3) or 3),
+                    start,
+                )
+            elif kind == "diag":
+                current, layer_num = add_micro_course_diag_line(
+                    filters,
+                    current,
+                    layer_num,
+                    int(op.get("x1", 0) or 0),
+                    int(op.get("y1", 0) or 0),
+                    int(op.get("x2", 0) or 0),
+                    int(op.get("y2", 0) or 0),
+                    color,
+                    int(op.get("thickness", 4) or 4),
+                    start,
+                    int(op.get("pieces", 24) or 24),
+                )
+            elif kind == "text":
+                current, layer_num = add_filter_drawtext(
+                    filters,
+                    current,
+                    layer_num,
+                    op.get("text", ""),
+                    x=int(op.get("x", 0) or 0),
+                    y=int(op.get("y", 0) or 0),
+                    font_size=int(op.get("font_size", 28) or 28),
+                    color=color,
+                    bold=bool(op.get("bold", False)),
+                    start=start,
+                )
+        except Exception:
+            continue
+    return current, layer_num
+
+
 def micro_course_canvas(duration, project=None, slide_num=0, slide_data=None):
-    filters = [f"color=c=#eef7ff:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
+    framework, theme = micro_course_theme(slide_num=slide_num, slide_data=slide_data, project=project)
+    bg = theme.get("background", "#eef7ff")
+    accent = theme.get("accent", "#1d4ed8")
+    filters = [f"color=c={bg}:s={VIDEO_W}x{VIDEO_H}:d={duration}[bg]"]
     current = "bg"
     layer_num = 0
-    if micro_course_visual_asset(project, slide_num, slide_data):
+    family = framework.get("family", "general")
+    if slide_background_decor_asset(project, slide_num):
+        cover_opacity = 0.045 if family == "humanities" else 0.035
+        wash_opacity = 0.84 if family == "humanities" else 0.88
+        edge_opacity = 0.12 if family == "humanities" else 0.085
+        current, layer_num = add_filter_background_decor(filters, current, layer_num, opacity=cover_opacity, start=0.0)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, VIDEO_H), f"white@{wash_opacity:.2f}", "fill", 0.0)
+        current, layer_num = add_filter_background_edge_decor(filters, current, layer_num, opacity=edge_opacity, start=0.0, variant=slide_num)
+    elif micro_course_visual_asset(project, slide_num, slide_data):
+        wash_opacity = 0.76 if family == "humanities" else 0.84
         current, layer_num = add_filter_visual_cover(filters, current, layer_num, box=(0, 0, VIDEO_W, VIDEO_H), opacity=0.10, start=0.0)
-        current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, VIDEO_H), "white@0.84", "fill", 0.0)
-    current, layer_num = add_filter_circle(filters, current, layer_num, 1730, 200, 145, "#bfdbfe@0.30", 0.0)
-    current, layer_num = add_filter_circle(filters, current, layer_num, 205, 910, 120, "#bbf7d0@0.22", 0.0)
-    current, layer_num = add_filter_roundrect(filters, current, layer_num, (0, 0, VIDEO_W, 10), "#1d4ed8", 0, 0.0)
+        current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, VIDEO_H), f"white@{wash_opacity:.2f}", "fill", 0.0)
+    current, layer_num = apply_subject_background_pattern(filters, current, layer_num, framework, slide_num)
+    current, layer_num = add_filter_roundrect(filters, current, layer_num, (0, 0, VIDEO_W, 10), accent, 0, 0.0)
     return filters, current, layer_num
 
 
@@ -6477,12 +7029,26 @@ def add_micro_course_point_stack(filters, current, layer_num, points, *, x, y, w
     return current, layer_num
 
 
-def add_micro_course_formula_block(filters, current, layer_num, formula, *, x, y, width, height, start=0.62, accent="#2563eb"):
+def add_micro_course_formula_block(
+    filters,
+    current,
+    layer_num,
+    formula,
+    *,
+    x,
+    y,
+    width,
+    height,
+    start=0.62,
+    accent="#2563eb",
+    label="关键式",
+    default_text="先看条件，再代入检验",
+):
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 18, y + 18, width, height), "black@0.045", 34, start)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, width, height), "#ffffff@0.92", 34, start + 0.03)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 26, y + 24, 120, 38), f"{accent}@0.14", 19, start + 0.08)
-    current, layer_num = add_filter_drawtext(filters, current, layer_num, "关键式", x=x + 50, y=y + 33, font_size=20, color=accent, bold=True, start=start + 0.10)
-    display_formula = formula or "先看条件，再代入检验"
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 50, y=y + 33, font_size=20, color=accent, bold=True, start=start + 0.10)
+    display_formula = formula or default_text
     if is_pure_math_text(display_formula):
         formula_area_h = max(40, height - 120)
         formula_font = min(38, max(22, int(formula_area_h * 0.28)))
@@ -6507,14 +7073,41 @@ def add_micro_course_formula_block(filters, current, layer_num, formula, *, x, y
     return current, layer_num
 
 
-def add_micro_course_rule_formula(filters, current, layer_num, formula, *, x, y, width, height, start=0.62, accent="#2563eb"):
+def add_micro_course_rule_formula(
+    filters,
+    current,
+    layer_num,
+    formula,
+    *,
+    x,
+    y,
+    width,
+    height,
+    start=0.62,
+    accent="#2563eb",
+    label="关键式",
+    default_text="先看条件，再代入检验",
+):
     lines = [part.strip() for part in re.split(r"[；;]", normalize_video_text(formula)) if part.strip()]
     if is_pure_math_text(formula) or len(lines) <= 1:
-        return add_micro_course_formula_block(filters, current, layer_num, formula, x=x, y=y, width=width, height=height, start=start, accent=accent)
+        return add_micro_course_formula_block(
+            filters,
+            current,
+            layer_num,
+            formula,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            start=start,
+            accent=accent,
+            label=label,
+            default_text=default_text,
+        )
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 18, y + 18, width, height), "black@0.045", 34, start)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x, y, width, height), "#ffffff@0.92", 34, start + 0.03)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (x + 26, y + 24, 120, 38), f"{accent}@0.14", 19, start + 0.08)
-    current, layer_num = add_filter_drawtext(filters, current, layer_num, "关键式", x=x + 50, y=y + 33, font_size=20, color=accent, bold=True, start=start + 0.10)
+    current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 50, y=y + 33, font_size=20, color=accent, bold=True, start=start + 0.10)
     line_h = max(48, int((height - 108) / min(3, len(lines))))
     for idx, line in enumerate(lines[:3]):
         if is_pure_math_text(line):
@@ -6822,9 +7415,12 @@ def add_micro_course_math_visual(filters, current, layer_num, ctx, *, box, start
 
 def layout_micro_course_opener(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
-    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "简明精讲 / 公式理解 / 例题应用", 0.12)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], micro_course_opener_subtitle(ctx), 0.12, ctx.get("framework"))
     if ctx["visual_asset"]:
-        current, layer_num = add_micro_course_image_scene(filters, current, layer_num, box=(1040, 230, 710, 475), label="本节主题图", start=0.48, accent="#1d4ed8")
+        framework = ctx.get("framework") or {}
+        image_label = (framework.get("labels") or {}).get("image", "本节主题图")
+        accent = (framework.get("theme") or {}).get("accent", "#1d4ed8")
+        current, layer_num = add_micro_course_image_scene(filters, current, layer_num, box=(1040, 230, 710, 475), label=image_label, start=0.48, accent=accent)
         left_w = 760
     else:
         left_w = 1100
@@ -6832,19 +7428,64 @@ def layout_micro_course_opener(ctx, slide_data, slide_num, duration, project=Non
     points = micro_course_enriched_points(ctx, limit=3)
     current, layer_num = add_micro_course_point_stack(filters, current, layer_num, points, x=155, y=410, width=left_w, accent="#1d70c9", start=0.62)
     current, layer_num = add_filter_roundrect(filters, current, layer_num, (155, 790, 1220, 86), "#dbeafe@0.82", 28, 0.96)
-    current, layer_num = add_bounded_text(filters, current, layer_num, "学习路径：符号含义 / 限制条件 / 运算方法 / 题目检验。", x=205, y=812, width=1120, height=42, max_font=28, min_font=20, color="#08215c", bold=True, start=1.02)
+    current, layer_num = add_bounded_text(filters, current, layer_num, micro_course_opener_path(ctx), x=205, y=812, width=1120, height=42, max_font=28, min_font=20, color="#08215c", bold=True, start=1.02)
     return filters, current, layer_num
 
 
 def layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
     combined = " ".join([normalize_video_text(ctx.get("title", "")), normalize_video_text(ctx.get("formula", "")), *[normalize_video_text(line) for line in ctx.get("rest", [])]])
-    header_note = "先抓条件，再看公式怎么用" if any(keyword in combined for keyword in ("公式", "计算", "法则", "方程", "函数", "不等式")) else "先抓条件，再看怎么判断"
-    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], header_note, 0.12)
+    framework = ctx.get("framework") or micro_course_framework(combined, [], slide_num)
+    is_literature = micro_course_is_literature_text(combined)
+    if is_literature:
+        header_note = "先抓文本特征，再看表达效果"
+    elif framework.get("family") == "humanities":
+        header_note = "先抓材料线索，再看观点如何成立"
+    else:
+        header_note = "先抓条件，再看公式怎么用" if any(keyword in combined for keyword in ("公式", "计算", "法则", "方程", "函数", "不等式")) else "先抓条件，再看怎么判断"
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], header_note, 0.12, ctx.get("framework"))
     lead_text = micro_course_formula_lead_text(ctx)
     current, layer_num = add_bounded_text(filters, current, layer_num, lead_text, x=110, y=210, width=710, height=104, max_font=28, min_font=19, color="#111827", start=0.38)
-    current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, ctx["formula"], x=940, y=225, width=760, height=245, start=0.50, accent="#2563eb")
-    labels = ["条件", "表达", "检验"]
+    rule_formula = ctx["formula"]
+    rule_label = "关键式"
+    rule_default = "先看条件，再代入检验"
+    if is_literature or framework.get("family") == "humanities":
+        rule_formula = rule_formula or "文本定位 → 表达效果 → 主题判断"
+        rule_label = "文本线索"
+        rule_default = "文本定位 → 表达效果 → 主题判断"
+    current, layer_num = add_micro_course_rule_formula(
+        filters, current, layer_num, rule_formula,
+        x=940, y=225, width=760, height=245, start=0.50, accent="#2563eb",
+        label=rule_label, default_text=rule_default
+    )
+    framework_labels = framework.get("labels") or {}
+    if is_literature:
+        if "学习目标" in combined:
+            labels = ["读深", "说准", "迁移"]
+        elif "文本线索" in combined or "线索地图" in combined:
+            labels = ["空间线", "人物线", "主题线"]
+        elif "母亲形象" in combined:
+            labels = ["细节", "心理", "主题"]
+        elif "情感变化" in combined:
+            labels = ["起点", "转折", "结果"]
+        elif "联读" in combined or "秋天的怀念" in combined:
+            labels = ["共通", "差异", "迁移"]
+        elif "合作探究" in combined:
+            labels = ["依据", "讨论", "表达"]
+        elif "拓展表达" in combined:
+            labels = ["看语意", "接语气", "查连贯"]
+        elif "总结" in combined:
+            labels = ["方法", "主题", "迁移"]
+        else:
+            labels = ["定位", "表达", "判断"]
+    elif framework_labels:
+        labels = [
+            framework_labels.get("point_a", "条件"),
+            framework_labels.get("point_b", "表达"),
+            framework_labels.get("point_c", "检验"),
+        ]
+    else:
+        labels = ["条件", "表达", "检验"]
     point_source = micro_course_formula_card_details(ctx)
     for idx, label in enumerate(labels):
         x = 175 + idx * 520
@@ -6854,14 +7495,28 @@ def layout_micro_course_formula_lens(ctx, slide_data, slide_num, duration, proje
         current, layer_num = add_filter_drawtext(filters, current, layer_num, label, x=x + 32, y=y + 24, font_size=28, color=accent, bold=True, start=0.78 + idx * 0.08)
         current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point_source[idx] if idx < len(point_source) else label, x=x + 32, y=y + 70, width=366, height=132, max_font=21, min_font=14, color="#0f172a", bold=True, start=0.84 + idx * 0.08)
     check_text = micro_course_formula_quick_check(ctx)
-    current, layer_num = add_filter_roundrect(filters, current, layer_num, (340, 835, 1240, 70), "#f5f3ff@0.92", 22, 1.02)
-    current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"快速检验：{check_text}", x=390, y=846, width=1140, height=48, max_font=26, min_font=18, color="#5b21b6", bold=True, start=1.08)
+    bottom_label = "快速判断" if is_literature else "快速检验"
+    if is_literature:
+        note_positions = [(1040, 766, 650, 72), (260, 764, 720, 72), (1110, 488, 590, 78)]
+        nx, ny, nw, nh = note_positions[slide_num % len(note_positions)]
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (nx, ny, nw, nh), "#f5f3ff@0.90", 22, 1.02)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"{bottom_label}：{check_text}", x=nx + 34, y=ny + 12, width=nw - 68, height=nh - 24, max_font=23, min_font=16, color="#5b21b6", bold=True, start=1.08)
+    else:
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (340, 835, 1240, 70), "#f5f3ff@0.92", 22, 1.02)
+        current, layer_num = add_micro_course_safe_text(filters, current, layer_num, f"{bottom_label}：{check_text}", x=390, y=846, width=1140, height=48, max_font=26, min_font=18, color="#5b21b6", bold=True, start=1.08)
     return filters, current, layer_num
 
 
 def layout_micro_course_case_scene(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
-    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "用图像和案例降低理解成本", 0.12)
+    framework = ctx.get("framework") or {}
+    if framework.get("family") == "humanities":
+        header_note = "用背景图和细节证据补足语境"
+    elif framework.get("family") == "stem":
+        header_note = "用示意图和实验图降低理解成本"
+    else:
+        header_note = "用图像和案例降低理解成本"
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], header_note, 0.12, ctx.get("framework"))
     current, layer_num = add_micro_course_math_visual(filters, current, layer_num, ctx, box=(110, 235, 820, 430), start=0.42, accent="#1d4ed8")
     text_x, text_w = 1015, 735
     current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=text_x, y=235, width=text_w, height=92, max_font=31, min_font=20, color="#111827", bold=True, start=0.52)
@@ -6874,14 +7529,20 @@ def layout_micro_course_case_scene(ctx, slide_data, slide_num, duration, project
         current, layer_num = add_filter_drawtext(filters, current, layer_num, str(idx + 1), x=text_x + 34, y=y + 37, font_size=22, color=accent, bold=True, start=0.72 + idx * 0.08)
         current, layer_num = add_micro_course_safe_text(filters, current, layer_num, point, x=text_x + 82, y=y + 16, width=text_w - 120, height=74, max_font=22, min_font=14, color="#0f172a", bold=True, start=0.76 + idx * 0.08)
     bottom = ctx.get("check") or (ctx["examples"][0] if ctx["examples"] else (ctx["formula"] or "用一个具体数检验结论是否成立。"))
-    current, layer_num = add_filter_roundrect(filters, current, layer_num, (265, 855, 1390, 64), "#ecfeff@0.90", 22, 1.02)
-    current, layer_num = add_bounded_text(filters, current, layer_num, f"落地看：{bottom}", x=320, y=872, width=1280, height=30, max_font=24, min_font=17, color="#155e75", bold=True, start=1.08)
+    if framework.get("family") == "humanities":
+        note_positions = [(1030, 762, 650, 76), (235, 760, 720, 76), (1080, 704, 610, 78)]
+        nx, ny, nw, nh = note_positions[slide_num % len(note_positions)]
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (nx, ny, nw, nh), "#ecfeff@0.88", 22, 1.02)
+        current, layer_num = add_bounded_text(filters, current, layer_num, f"落地看：{bottom}", x=nx + 38, y=ny + 16, width=nw - 76, height=nh - 30, max_font=23, min_font=16, color="#155e75", bold=True, start=1.08)
+    else:
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (265, 855, 1390, 64), "#ecfeff@0.90", 22, 1.02)
+        current, layer_num = add_bounded_text(filters, current, layer_num, f"落地看：{bottom}", x=320, y=872, width=1280, height=30, max_font=24, min_font=17, color="#155e75", bold=True, start=1.08)
     return filters, current, layer_num
 
 
 def layout_micro_course_example_workbench(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
-    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "例题不单独成格，而是和规则一起演示", 0.12)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], "例题不单独成格，而是和规则一起演示", 0.12, ctx.get("framework"))
     formula = ctx["formula"] or (ctx["examples"][0] if ctx["examples"] else "先列式，再化简，最后验算")
     current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, formula, x=120, y=220, width=700, height=210, start=0.42, accent="#16a34a")
     steps = ctx.get("steps", [])[:3]
@@ -6904,12 +7565,36 @@ def layout_micro_course_example_workbench(ctx, slide_data, slide_num, duration, 
 
 def layout_micro_course_concept_bites(ctx, slide_data, slide_num, duration, project=None):
     filters, current, layer_num = micro_course_canvas(duration, project, slide_num, slide_data)
+    combined = micro_course_combined_ctx_text(ctx)
     if normalize_video_text(ctx["title"]) == "目录":
         directory_labels = [label for label in micro_course_directory_labels(ctx.get("rest", []), limit=3) if label]
         subtitle = " / ".join(directory_labels) if directory_labels else "概念路径 / 方法 / 应用"
+    elif micro_course_is_literature_text(combined):
+        subtitle = "文本线索 / 细节赏析 / 主题归纳"
     else:
         subtitle = "重点信息分层讲清楚"
-    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], subtitle, 0.12)
+    current, layer_num = add_micro_course_header(filters, current, layer_num, ctx["title"], subtitle, 0.12, ctx.get("framework"))
+    if micro_course_is_literature_text(combined):
+        current, layer_num = add_bounded_text(
+            filters, current, layer_num, ctx["lead"],
+            x=155, y=235, width=1120, height=86,
+            max_font=32, min_font=21, color="#111827", bold=True, start=0.42
+        )
+        points = micro_course_enriched_points(ctx, limit=3)
+        current, layer_num = add_micro_course_point_stack(
+            filters, current, layer_num, points,
+            x=155, y=385, width=1180, accent="#1d70c9", start=0.62
+        )
+        bottom_text = ctx.get("check") or (ctx["examples"][0] if ctx["examples"] else "回到原文细节，检查解释是否能支撑主题结论。")
+        note_positions = [(1015, 740, 670, 78), (235, 748, 720, 76), (1010, 328, 660, 78)]
+        nx, ny, nw, nh = note_positions[slide_num % len(note_positions)]
+        current, layer_num = add_filter_roundrect(filters, current, layer_num, (nx, ny, nw, nh), "#f5f3ff@0.88", 22, 1.02)
+        current, layer_num = add_micro_course_safe_text(
+            filters, current, layer_num, f"落地看：{bottom_text}",
+            x=nx + 38, y=ny + 14, width=nw - 76, height=nh - 28,
+            max_font=23, min_font=16, color="#5b21b6", bold=True, start=1.08
+        )
+        return filters, current, layer_num
     current, layer_num = add_bounded_text(filters, current, layer_num, ctx["lead"], x=170, y=235, width=780, height=80, max_font=32, min_font=21, color="#111827", bold=True, start=0.42)
     center_text = ctx["formula"] or ctx["points"][0]
     current, layer_num = add_micro_course_rule_formula(filters, current, layer_num, center_text, x=1060, y=235, width=570, height=225, start=0.50, accent="#7c3aed")
@@ -7051,17 +7736,20 @@ def probe_duration_or_none(media_path):
     media_path = Path(media_path)
     if not media_path.exists():
         return None
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "json", str(media_path)],
-            capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True
-        )
-        duration = float(json.loads(result.stdout)["format"]["duration"])
-        if duration > 0:
-            return duration
-    except Exception:
-        return None
+    for attempt in range(4):
+        try:
+            if attempt:
+                time.sleep(0.25 * attempt)
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "json", str(media_path)],
+                capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True, timeout=20
+            )
+            duration = float(json.loads(result.stdout)["format"]["duration"])
+            if duration > 0:
+                return duration
+        except Exception:
+            continue
     return None
 
 
@@ -7489,6 +8177,9 @@ def generate_slide(slide_data, audio_path, output_path, duration, slide_num, rec
     RENDER_CONTEXT.project = project
     RENDER_CONTEXT.formula_assets = []
     visual_asset = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
+    background_decor_asset = slide_background_decor_asset(project, slide_num)
+    RENDER_CONTEXT.visual_input_index = 0 if visual_asset else None
+    RENDER_CONTEXT.background_decor_input_index = (1 if visual_asset else 0) if background_decor_asset else None
     if style == "adaptive":
         layout_type = "adaptive"
     elif style == "diverse":
@@ -7532,6 +8223,9 @@ def generate_slide(slide_data, audio_path, output_path, duration, slide_num, rec
     next_input_index = 0
     if visual_asset:
         cmd.extend(["-loop", "1", "-i", str(visual_asset)])
+        next_input_index += 1
+    if background_decor_asset:
+        cmd.extend(["-loop", "1", "-i", str(background_decor_asset)])
         next_input_index += 1
     for idx, formula_asset in enumerate(formula_assets):
         cmd.extend(["-loop", "1", "-i", str(formula_asset)])
@@ -7821,8 +8515,11 @@ def build_srt_from_notes(project, rendered_slides, output_path):
         local_times = [0.0] + cuts + [duration]
         slide_end = offset + duration
         for idx, part in enumerate(parts):
-            cursor = offset + local_times[idx]
-            end = offset + local_times[idx + 1]
+            local_start = max(0.0, local_times[idx] - SUBTITLE_AUDIO_LEAD_SECONDS)
+            local_end = max(local_start + 0.55, local_times[idx + 1] - SUBTITLE_AUDIO_LEAD_SECONDS)
+            local_end = min(duration, local_end)
+            cursor = offset + local_start
+            end = offset + local_end
             if idx == len(parts) - 1:
                 end = slide_end
             if end <= cursor:
@@ -7898,8 +8595,11 @@ def build_srt_from_script_plan(project, rendered_slides, output_path):
         local_times = [0.0] + cuts + [duration]
         slide_end = offset + duration
         for idx, chunk in enumerate(expanded_chunks):
-            part_start = offset + local_times[idx]
-            part_end = offset + local_times[idx + 1]
+            local_start = max(0.0, local_times[idx] - SUBTITLE_AUDIO_LEAD_SECONDS)
+            local_end = max(local_start + 0.55, local_times[idx + 1] - SUBTITLE_AUDIO_LEAD_SECONDS)
+            local_end = min(duration, local_end)
+            part_start = offset + local_start
+            part_end = offset + local_end
             if idx == len(expanded_chunks) - 1:
                 part_end = slide_end
             if part_end <= part_start:
@@ -8043,7 +8743,7 @@ def slide_render_key(project, slide_num, slide_data, audio, recommendation, dura
     art = slide_art_asset(project, slide_num)
     visual = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
     payload = {
-        "version": 61,
+        "version": 64,
         "slide_number": slide_num,
         "slide": slide_data,
         "source_lines": source_slide_lines(project, slide_num),

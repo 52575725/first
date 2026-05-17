@@ -34,6 +34,17 @@ except Exception as exc:  # pragma: no cover - import error is reported at runti
 else:
     RECOMMEND_IMPORT_ERROR = None
 
+try:
+    from subject_framework import framework_for_slide
+except Exception:  # pragma: no cover - optional in legacy runs
+    framework_for_slide = None  # type: ignore[assignment]
+
+try:
+    from visual_asset_planner import audit_downloaded_visual, audit_web_source_item
+except Exception:  # pragma: no cover - visual audit remains fail-open
+    audit_downloaded_visual = None  # type: ignore[assignment]
+    audit_web_source_item = None  # type: ignore[assignment]
+
 
 SOURCE_ASSET_RE = re.compile(
     r"(^|[/\\])slide_\d+_image_\d+\.(?:png|jpe?g|webp|gif|wmf|emf|svg)\)?$",
@@ -529,6 +540,199 @@ def teaching_voiceover(title: str, subtitle: str, paragraphs: list[Any], bullets
     return title
 
 
+def course_scene_voiceover(
+    title: str,
+    subtitle: str,
+    paragraphs: list[Any],
+    bullets: list[Any],
+    *,
+    framework: dict[str, Any] | None = None,
+    slide_number: int = 0,
+    previous_title: str = "",
+) -> str:
+    """Build a subject/scene-aware narration, then fall back to the legacy writer."""
+    framework = framework or {}
+    subject = framework.get("subject", "general")
+    family = framework.get("family", "general")
+    scene = framework.get("scene", "concept")
+    title = clean_course_title(title)
+    subtitle = cleanup_voiceover_text(subtitle)
+    points = clean_text_items([*paragraphs, *bullets])
+    points = [concise_detail(point) for point in points]
+    points = [point for point in points if point and not is_source_asset_reference(point)]
+    if not title and points:
+        title = clean_course_title(points.pop(0))
+    base = teaching_voiceover(title, subtitle, points[:3], points[3:])
+    if not title:
+        return base
+
+    selected = []
+    for point in ([subtitle] if subtitle else []) + points:
+        clean = cleanup_voiceover_text(point)
+        if clean and clean not in selected and clean != title:
+            selected.append(clean)
+        if len(selected) >= 4:
+            break
+
+    def join_points(limit: int = 3) -> str:
+        if not selected:
+            return ""
+        labels = ["第一", "第二", "第三", "最后"]
+        parts = []
+        for idx, point in enumerate(selected[:limit]):
+            parts.append(f"{labels[idx]}，{point}")
+        return "；".join(parts)
+
+    if family == "humanities":
+        if scene in {"quote_analysis", "close_reading", "character_analysis"}:
+            detail = join_points(3)
+            if detail:
+                return cleanup_voiceover_text(
+                    f"{title}不要只停在结论上，先回到原文找证据。{detail}。"
+                    "读文学类内容时，画面里的关键词要和文本细节互相对应，最后再落到人物、情感或主题。"
+                )
+        if scene == "reading_path":
+            detail = join_points(4)
+            return cleanup_voiceover_text(
+                f"{title}先搭阅读路线。{detail or base}。"
+                "这类页面适合用路径图把段落推进、人物关系和主题变化连起来。"
+            )
+        if scene == "emotion_curve":
+            detail = join_points(4)
+            return cleanup_voiceover_text(
+                f"{title}重点看情感怎样变化。{detail or base}。"
+                "讲解时按起点、转折和落点推进，避免把情感词孤立地背下来。"
+            )
+        if scene in {"comparison_reading", "discussion", "writing_task"}:
+            detail = join_points(3)
+            return cleanup_voiceover_text(
+                f"{title}从文本理解过渡到迁移运用。{detail or base}。"
+                "先说清依据，再比较差异，最后把方法用到表达或探究任务里。"
+            )
+        if selected:
+            return cleanup_voiceover_text(
+                f"{title}先抓住文本核心，再补充背景和细节。{join_points(3)}。"
+            )
+
+    if family == "stem":
+        if scene in {"definition", "formula"}:
+            detail = join_points(3)
+            return cleanup_voiceover_text(
+                f"{title}先把条件说清楚，再看表达式怎么成立。{detail or base}。"
+                "遇到公式时不要急着代入，先检查适用范围和物理或数学含义。"
+            )
+        if scene in {"example", "exercise", "derivation"}:
+            detail = join_points(4)
+            return cleanup_voiceover_text(
+                f"{title}按解题步骤展开。{detail or base}。"
+                "每一步都要说明为什么这样做，最后回到条件检验结果是否合理。"
+            )
+        if scene in {"experiment", "variable_control"}:
+            detail = join_points(4)
+            return cleanup_voiceover_text(
+                f"{title}先看实验目的，再看变量和现象。{detail or base}。"
+                "讲实验页时要把操作、观察和结论分开，避免只念器材或步骤。"
+            )
+        if scene in {"application", "case"}:
+            detail = join_points(3)
+            return cleanup_voiceover_text(
+                f"{title}把概念放回真实情境。{detail or base}。"
+                "先指出对应模型，再解释它能解决什么问题。"
+            )
+        if scene == "misconception":
+            detail = join_points(3)
+            return cleanup_voiceover_text(
+                f"{title}重点不是多算，而是区分容易混淆的条件。{detail or base}。"
+                "先指出错因，再给出正确判断路径。"
+            )
+
+    return base
+
+
+def script_style_for_framework(framework: dict[str, Any] | None) -> str:
+    framework = framework or {}
+    family = framework.get("family", "general")
+    scene = framework.get("scene", "concept")
+    if family == "humanities":
+        return f"humanities_{scene}"
+    if family == "stem":
+        return f"stem_{scene}"
+    return f"general_{scene}"
+
+
+def pause_hints_for_framework(framework: dict[str, Any] | None) -> list[str]:
+    framework = framework or {}
+    scene = framework.get("scene", "concept")
+    if scene in {"quote_analysis", "close_reading", "character_analysis"}:
+        return ["after_evidence", "before_theme"]
+    if scene in {"example", "exercise", "derivation", "formula"}:
+        return ["after_condition", "before_result"]
+    if scene in {"experiment", "variable_control"}:
+        return ["after_variable", "before_conclusion"]
+    return ["after_transition"]
+
+
+def prepare_voiceover_for_timing(
+    text: str,
+    framework: dict[str, Any] | None = None,
+    pause_hints: list[str] | None = None,
+) -> str:
+    """Keep subtitle chunking aligned with the exact text sent to TTS."""
+    framework = framework or {}
+    pause_hints = pause_hints or []
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if not text:
+        return ""
+    replacements = [
+        ("先", "先，"),
+        ("再", "再，"),
+        ("最后", "最后，"),
+        ("也就是说", "也就是说，"),
+        ("换句话说", "换句话说，"),
+        ("例如", "例如，"),
+        ("注意", "注意，"),
+    ]
+    for before, after in replacements:
+        text = text.replace(after, before)
+        text = text.replace(before, after)
+
+    scene = framework.get("scene", "")
+    if scene in {"quote_analysis", "close_reading", "character_analysis"}:
+        text = text.replace("原文", "原文，").replace("证据", "证据，")
+    elif scene in {"formula", "definition", "example", "exercise", "derivation"}:
+        text = text.replace("条件", "条件，").replace("结果", "结果，")
+    elif scene in {"experiment", "variable_control"}:
+        text = text.replace("变量", "变量，").replace("结论", "结论，")
+
+    text = re.sub(r"，{2,}", "，", text)
+    text = re.sub(r"。{2,}", "。", text)
+    text = re.sub(r"，([。！？；])", r"\1", text)
+
+    sentences = re.split(r"(?<=[。！？!?；;])", text)
+    balanced: list[str] = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) > 70 and "，" in sentence:
+            current = ""
+            for part in [part for part in sentence.split("，") if part]:
+                candidate = f"{current}，{part}" if current else part
+                if len(candidate) > 44 and current:
+                    balanced.append(current + "。")
+                    current = part
+                else:
+                    current = candidate
+            if current:
+                balanced.append(current if current[-1] in "。！？；;" else current + "。")
+        else:
+            balanced.append(sentence if sentence[-1] in "。！？；;" else sentence + "。")
+
+    if "after_transition" in pause_hints and len(balanced) >= 2:
+        balanced[0] = balanced[0].rstrip("。") + "。"
+    return "".join(balanced)
+
+
 def strip_page_lead(text: str, title: str) -> str:
     text = cleanup_voiceover_text(text)
     title = cleanup_voiceover_text(title)
@@ -639,6 +843,23 @@ def continuity_connector(slide_number: int, title: str, previous_title: str) -> 
         return ""
     if not previous_title or previous_title in {"目录", title}:
         return f"先来看{title}。"
+    joined = f"{previous_title} {title}"
+    if any(keyword in joined for keyword in ("文本", "课文", "赏析", "意象", "母亲", "情感", "史铁生", "地坛", "联读")):
+        if any(keyword in title for keyword in ("母亲", "人物", "形象")):
+            return f"前面抓住了文本线索，现在把镜头转向{title}。"
+        if any(keyword in title for keyword in ("情感", "主题", "生命", "表达")):
+            return f"有了细节依据，再往前推进到{title}。"
+        if any(keyword in title for keyword in ("联读", "拓展", "迁移")):
+            return f"理解了原文表达，再把方法迁移到{title}。"
+        return f"顺着{previous_title}的细节，继续看{title}。"
+    if any(keyword in joined for keyword in ("摩擦", "受力", "测力计", "正压力", "粗糙", "牛顿")):
+        if any(keyword in title for keyword in ("条件", "产生", "定义")):
+            return f"先把现象框住，接着看{title}。"
+        if any(keyword in title for keyword in ("实验", "探究", "影响")):
+            return f"概念说清楚后，用{title}来验证。"
+        if any(keyword in title for keyword in ("应用", "增大", "减小")):
+            return f"模型建立之后，再回到{title}。"
+        return f"沿着受力分析的思路，进入{title}。"
     if any(keyword in title for keyword in ("定义", "性质", "分类")):
         return f"顺着{previous_title}，再看{title}。"
     if any(keyword in title for keyword in ("乘法", "除法", "加减", "化简")):
@@ -804,6 +1025,16 @@ def load_existing_visual_asset(project: Path, slide_number: int) -> Path | None:
     return None
 
 
+def load_existing_background_decor(project: Path, slide_number: int) -> Path | None:
+    decor_dir = project / "images" / "background_decor"
+    for suffix in ("background", "decor", "texture"):
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            path = decor_dir / f"slide_{slide_number:02d}_{suffix}{ext}"
+            if path.exists() and path.stat().st_size > 40_000:
+                return path
+    return None
+
+
 def load_image_sources(project: Path) -> dict[int, dict[str, Any]]:
     sources = read_json(project / "images" / "visual_assets" / "image_sources.json", {})
     items = sources.get("items", []) if isinstance(sources, dict) else []
@@ -816,6 +1047,118 @@ def load_image_sources(project: Path) -> dict[int, dict[str, Any]]:
             continue
         by_slide[slide_number] = item
     return by_slide
+
+
+def load_background_decor_sources(project: Path) -> dict[int, dict[str, Any]]:
+    sources = read_json(project / "images" / "background_decor" / "image_sources.json", {})
+    items = sources.get("items", []) if isinstance(sources, dict) else []
+    by_slide: dict[int, dict[str, Any]] = {}
+    for item in items:
+        raw_slide = item.get("slide") or item.get("slide_number")
+        try:
+            slide_number = int(raw_slide)
+        except Exception:
+            continue
+        by_slide[slide_number] = item
+    return by_slide
+
+
+def load_visual_asset_executions(project: Path) -> dict[int, dict[str, Any]]:
+    manifest = read_json(project / "images" / "visual_asset_manifest.json", {})
+    executions = manifest.get("executed_assets", []) if isinstance(manifest, dict) else []
+    by_slide: dict[int, dict[str, Any]] = {}
+    for item in executions:
+        if item.get("kind") not in (None, "", "visual_asset"):
+            continue
+        try:
+            slide_number = int(item.get("slide_number"))
+        except Exception:
+            continue
+        by_slide[slide_number] = item
+    return by_slide
+
+
+HUMANITIES_COMPONENT_FALLBACKS = [
+    "magazine_spread",
+    "quote_focus",
+    "split_text_visual",
+    "photo_story",
+    "rounded_step_cards",
+    "insight_cards",
+]
+STEM_ONLY_COMPONENTS = {
+    "blackboard_derivation",
+    "formula_walkthrough",
+    "radial_concept_map",
+    "checkpoint_ladder",
+    "misconception_compare",
+}
+HUMANITIES_ONLY_COMPONENTS = {"quote_focus", "magazine_spread", "photo_story"}
+
+
+def guard_component_for_framework(component: str, framework: dict[str, Any] | None) -> tuple[str, str]:
+    framework = framework or {}
+    family = framework.get("family", "general")
+    pool = [item for item in framework.get("component_pool", []) if item]
+    if family == "humanities" and component in STEM_ONLY_COMPONENTS:
+        for candidate in pool + HUMANITIES_COMPONENT_FALLBACKS:
+            if candidate not in STEM_ONLY_COMPONENTS:
+                return candidate, f"replaced STEM component {component} for humanities slide"
+    if family == "stem" and component in HUMANITIES_ONLY_COMPONENTS:
+        for candidate in pool + ["formula_walkthrough", "process_flow", "rounded_step_cards"]:
+            if candidate not in HUMANITIES_ONLY_COMPONENTS:
+                return candidate, f"replaced humanities component {component} for STEM slide"
+    return component, ""
+
+
+def audit_visual_source_for_render(
+    *,
+    source_meta: dict[str, Any],
+    decision: dict[str, Any],
+    execution: dict[str, Any],
+    asset_path: Path | None = None,
+) -> dict[str, Any]:
+    if execution.get("visual_audit"):
+        return execution["visual_audit"]
+    query = source_meta.get("search_query") or ""
+    if not query:
+        for segment in decision.get("segments", []):
+            if segment.get("mode") == "search" and segment.get("query"):
+                query = segment["query"]
+                break
+    framework = decision.get("subject_framework") or {}
+    if asset_path and audit_downloaded_visual is not None and source_meta and asset_path.exists():
+        return audit_downloaded_visual(asset_path, source_meta, query=query, framework=framework)
+    if execution.get("web_relevance_audit"):
+        audit = dict(execution["web_relevance_audit"])
+        if execution.get("image_content_audit"):
+            audit = {
+                "score": audit.get("score", 0),
+                "accepted": audit.get("accepted"),
+                "reason": audit.get("reason", ""),
+                "metadata": execution["web_relevance_audit"],
+                "content": execution.get("image_content_audit", {}),
+            }
+        return audit
+    if audit_web_source_item is None or not source_meta:
+        return {}
+    return audit_web_source_item(source_meta, query=query, framework=framework)
+
+
+def framework_for_qa_slide(
+    title: str,
+    lines: list[str],
+    slide_number: int,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if fallback and fallback.get("subject") not in {"", None, "general"}:
+        return fallback
+    if framework_for_slide is None:
+        return fallback or {}
+    try:
+        return framework_for_slide(title, lines, slide_number)
+    except Exception:
+        return fallback or {}
 
 
 @dataclass
@@ -976,6 +1319,8 @@ class PreflightAgent:
     def run(self, ctx: AgentContext, slide_ir: list[dict[str, Any]]) -> RoleResult:
         slides_report: list[dict[str, Any]] = []
         page_types: dict[str, int] = {}
+        semantic_page_types: dict[str, int] = {}
+        subject_counts: dict[str, int] = {}
         risk_counts: dict[str, int] = {}
 
         for slide in slide_ir:
@@ -988,11 +1333,22 @@ class PreflightAgent:
             layout = slide.get("layout", {}) or {}
             page_type = layout.get("page_type", "unknown")
             page_types[page_type] = page_types.get(page_type, 0) + 1
+            framework = framework_for_qa_slide(title, source_lines + paragraphs + bullets, slide_number, {})
+            subject = framework.get("subject", "general")
+            semantic_page_type = framework.get("page_type") or framework.get("scene") or "concept"
+            subject_counts[subject] = subject_counts.get(subject, 0) + 1
+            semantic_page_types[semantic_page_type] = semantic_page_types.get(semantic_page_type, 0) + 1
             text_units = visual_text_len(" ".join([title, *paragraphs, *bullets]))
             image_count = len(slide.get("images", []))
 
             risks: list[str] = []
             suggestions: list[str] = []
+            if framework.get("image_policy") in {"prefer", "required"} and image_count == 0 and text_units < 80:
+                risks.append("visual_enrichment_needed")
+                suggestions.append("This page should receive a searched/generated subject-relevant visual, not only text.")
+            if text_units < 18 and image_count == 0 and semantic_page_type not in {"cover", "summary"}:
+                risks.append("sparse_explanation_needed")
+                suggestions.append("Sparse content should be expanded with explanation, examples, or context cards.")
             if catalog_items:
                 risks.append("catalog_detected")
                 suggestions.append("目录页将自动生成连贯导读旁白。")
@@ -1019,7 +1375,16 @@ class PreflightAgent:
                 risk_counts[risk] = risk_counts.get(risk, 0) + 1
 
             severity = "low"
-            if any(risk in risks for risk in ("empty_or_low_text", "dense_text", "numeric_noise")):
+            if any(
+                risk in risks
+                for risk in (
+                    "empty_or_low_text",
+                    "dense_text",
+                    "numeric_noise",
+                    "visual_enrichment_needed",
+                    "sparse_explanation_needed",
+                )
+            ):
                 severity = "medium"
             if "empty_or_low_text" in risks and image_count == 0:
                 severity = "high"
@@ -1029,6 +1394,10 @@ class PreflightAgent:
                     "slide_number": slide_number,
                     "title": title,
                     "page_type": page_type,
+                    "semantic_page_type": semantic_page_type,
+                    "subject": subject,
+                    "scene": framework.get("scene", "concept"),
+                    "subject_framework": framework,
                     "text_units": round(text_units, 1),
                     "image_count": image_count,
                     "catalog_items": catalog_items,
@@ -1048,8 +1417,15 @@ class PreflightAgent:
                 "high_risk_slides": high,
                 "medium_risk_slides": medium,
                 "page_types": page_types,
+                "semantic_page_types": semantic_page_types,
+                "subject_counts": subject_counts,
                 "risk_counts": risk_counts,
                 "preview_recommended": bool(high or medium),
+                "preview_first_recommended": bool(
+                    high
+                    or medium
+                    or any(key in risk_counts for key in ("visual_enrichment_needed", "sparse_explanation_needed"))
+                ),
                 "preview_slides": ctx.args.preview_slides or min(5, len(slide_ir)),
             },
             "slides": slides_report,
@@ -1090,14 +1466,23 @@ class ScriptWriterAgent:
                     *slide.get("bullets", []),
                 ]
             )
+            framework = framework_for_qa_slide(
+                slide.get("title", ""),
+                source_lines + [str(item) for item in slide.get("paragraphs", [])] + [str(item) for item in slide.get("bullets", [])],
+                slide_number,
+                {},
+            )
             if catalog_items:
                 voiceover = catalog_voiceover(catalog_items)
             else:
-                voiceover = teaching_voiceover(
+                voiceover = course_scene_voiceover(
                     slide.get("title", ""),
                     slide.get("subtitle", ""),
                     slide.get("paragraphs", []),
                     slide.get("bullets", []),
+                    framework=framework,
+                    slide_number=slide_number,
+                    previous_title=previous_title,
                 )
             if not voiceover:
                 voiceover = f"第 {slide_number} 页为视觉内容页，请结合画面查看。"
@@ -1108,7 +1493,9 @@ class ScriptWriterAgent:
                 title=title,
                 previous_title=previous_title,
             )
-            chunks = sentence_chunks(voiceover)
+            pause_hints = pause_hints_for_framework(framework)
+            tts_voiceover = prepare_voiceover_for_timing(voiceover, framework, pause_hints)
+            chunks = sentence_chunks(tts_voiceover)
             if not chunks:
                 chunks = [slide.get("title", f"Slide {slide_number}")]
             chunks = chunks[:10]
@@ -1139,8 +1526,13 @@ class ScriptWriterAgent:
                     "title": title,
                     "duration": round(duration, 2),
                     "voiceover": compact_text(voiceover, 900),
+                    "tts_voiceover": compact_text(tts_voiceover, 900),
                     "subtitle_chunks": timed_chunks,
                     "audio_path": str(audio) if audio.exists() else "",
+                    "script_style": script_style_for_framework(framework),
+                    "scene": framework.get("scene", "concept"),
+                    "subject_framework": framework,
+                    "pause_hints": pause_hints,
                 }
             )
             if title and not is_catalog_marker(title):
@@ -1173,6 +1565,12 @@ class ComponentSelectorAgent:
         for item in recommendations:
             strategy = item.get("render_strategy", {})
             selected = strategy.get("visual_effect") or item.get("primary_component")
+            selected, guard_reason = guard_component_for_framework(
+                selected,
+                strategy.get("subject_framework") or {},
+            )
+            if guard_reason:
+                strategy = {**strategy, "visual_effect": selected}
             component_plan.append(
                 {
                     "slide_number": item.get("slide_number"),
@@ -1181,7 +1579,7 @@ class ComponentSelectorAgent:
                     "alternatives": item.get("alternatives", []),
                     "confidence": item.get("confidence"),
                     "selection_source": item.get("selection_source"),
-                    "reason": item.get("reason", ""),
+                    "reason": "; ".join(part for part in (item.get("reason", ""), guard_reason) if part),
                     "render_strategy": strategy,
                 }
             )
@@ -1227,6 +1625,20 @@ class NarrationAudioAgent:
                 metrics={"audio_files": len(existing)},
             )
 
+        subject_counts: dict[str, int] = {}
+        for slide in plan.get("slides", []):
+            framework = slide.get("subject_framework") or {}
+            subject = framework.get("subject") or "general"
+            subject_counts[subject] = subject_counts.get(subject, 0) + 1
+        dominant_subject = max(subject_counts, key=subject_counts.get) if subject_counts else "general"
+        edge_rate = ctx.args.tts_edge_rate
+        edge_pitch = ctx.args.tts_edge_pitch
+        if edge_rate == "-6%":
+            if dominant_subject in {"literature", "history", "politics"}:
+                edge_rate = "-8%"
+            elif dominant_subject in {"math", "physics", "chemistry", "biology"}:
+                edge_rate = "-5%"
+
         command = [
             sys.executable,
             str(SCRIPT_DIR / "script_plan_to_audio.py"),
@@ -1236,9 +1648,9 @@ class NarrationAudioAgent:
             "--voice",
             ctx.args.tts_voice,
             "--edge-rate",
-            ctx.args.tts_edge_rate,
+            edge_rate,
             "--edge-pitch",
-            ctx.args.tts_edge_pitch,
+            edge_pitch,
             "--rate",
             str(ctx.args.tts_rate),
         ]
@@ -1256,7 +1668,7 @@ class NarrationAudioAgent:
             self.name,
             "completed",
             outputs={"audio_manifest": str(manifest_path)},
-            metrics={"ready_audio_files": ready, "slides": len(outputs)},
+            metrics={"ready_audio_files": ready, "slides": len(outputs), "dominant_subject": dominant_subject},
         )
 
 
@@ -1266,21 +1678,34 @@ class AssetCuratorAgent:
     def run(self, ctx: AgentContext, slide_ir: list[dict[str, Any]]) -> tuple[dict[int, dict[str, Any]], RoleResult]:
         manifest_path = ctx.project / "images" / "visual_asset_manifest.json"
         visual_dir = ctx.project / "images" / "visual_assets"
+        decor_dir = ctx.project / "images" / "background_decor"
         existing_assets = {
             int(path.stem.split("_")[1]): path
             for path in visual_dir.glob("slide_*_visual.*")
             if path.exists() and path.stat().st_size > 50_000 and re.match(r"slide_\d+_visual", path.stem)
         } if visual_dir.exists() else {}
+        existing_backgrounds = {
+            int(path.stem.split("_")[1]): path
+            for path in decor_dir.glob("slide_*_background.*")
+            if path.exists() and path.stat().st_size > 40_000 and re.match(r"slide_\d+_background", path.stem)
+        } if decor_dir.exists() else {}
+        missing_background_count = max(0, len(slide_ir) - len(existing_backgrounds))
 
         notes: list[str] = []
-        if ctx.args.execute_assets:
+        should_execute_assets = ctx.args.execute_assets or (
+            ctx.args.render and missing_background_count > 0 and not ctx.args.skip_assets
+        )
+        if should_execute_assets:
             command = [sys.executable, str(SCRIPT_DIR / "visual_asset_planner.py"), str(ctx.project), "--execute"]
             if ctx.args.asset_limit:
                 command.extend(["--limit", str(ctx.args.asset_limit)])
             result = run_command(command, SCRIPT_DIR.parent.parent, timeout=ctx.args.asset_timeout)
             if not result["ok"]:
-                raise RuntimeError(result["stderr"] or "visual_asset_planner.py failed")
-            notes.append("visual_asset_planner.py executed search/generation.")
+                if ctx.args.execute_assets:
+                    raise RuntimeError(result["stderr"] or "visual_asset_planner.py failed")
+                notes.append("background decor search failed; continuing with local fallback.")
+            else:
+                notes.append("visual_asset_planner.py executed search/generation.")
         elif not existing_assets and not manifest_path.exists() and not ctx.args.skip_assets:
             command = [sys.executable, str(SCRIPT_DIR / "visual_asset_planner.py"), str(ctx.project)]
             result = run_command(command, SCRIPT_DIR.parent.parent, timeout=ctx.args.asset_timeout)
@@ -1292,10 +1717,11 @@ class AssetCuratorAgent:
 
         manifest = read_json(manifest_path, {})
         image_sources = load_image_sources(ctx.project)
+        background_sources = load_background_decor_sources(ctx.project)
+        executions = load_visual_asset_executions(ctx.project)
         by_slide: dict[int, dict[str, Any]] = {}
         for slide in slide_ir:
             slide_number = int(slide["slide_number"])
-            asset_path = load_existing_visual_asset(ctx.project, slide_number)
             decision = next(
                 (
                     item for item in manifest.get("decisions", [])
@@ -1304,6 +1730,22 @@ class AssetCuratorAgent:
                 {},
             ) if isinstance(manifest, dict) else {}
             source_meta = image_sources.get(slide_number, {})
+            background_path = load_existing_background_decor(ctx.project, slide_number)
+            background_source = background_sources.get(slide_number, {})
+            execution = executions.get(slide_number, {})
+            asset_path = load_existing_visual_asset(ctx.project, slide_number)
+            relevance_audit = audit_visual_source_for_render(
+                source_meta=source_meta,
+                decision=decision,
+                execution=execution,
+                asset_path=asset_path,
+            )
+            if asset_path and relevance_audit and relevance_audit.get("accepted") is False:
+                notes.append(
+                    f"Slide {slide_number}: ignored visual asset after relevance audit "
+                    f"({relevance_audit.get('reason', 'no reason')})."
+                )
+                asset_path = None
             by_slide[slide_number] = {
                 "slide_number": slide_number,
                 "mode": decision.get("recommended_mode", "existing" if asset_path else "none"),
@@ -1311,6 +1753,11 @@ class AssetCuratorAgent:
                 "asset_path": str(asset_path) if asset_path else "",
                 "asset_ready": bool(asset_path),
                 "source": source_meta,
+                "execution": execution,
+                "visual_relevance": relevance_audit,
+                "background_decor_path": str(background_path) if background_path else "",
+                "background_decor_ready": bool(background_path),
+                "background_decor_source": background_source,
             }
 
         path = write_json(ctx.project / "asset_plan.json", {
@@ -1325,6 +1772,7 @@ class AssetCuratorAgent:
             notes=notes,
             metrics={
                 "slides_with_ready_assets": sum(1 for item in by_slide.values() if item["asset_ready"]),
+                "slides_with_background_decor": sum(1 for item in by_slide.values() if item["background_decor_ready"]),
                 "slides": len(by_slide),
             },
         )
@@ -1356,9 +1804,15 @@ class LayoutComposerAgent:
                     "layout_style": ctx.args.style,
                     "component": component.get("selected_component", "callout_overlay"),
                     "base_component": component.get("base_component", "preserve_slide"),
+                    "subject_framework": (component.get("render_strategy") or {}).get("subject_framework", {}),
+                    "semantic_page_type": ((component.get("render_strategy") or {}).get("subject_framework", {}) or {}).get("page_type", ""),
+                    "scene_tags": ((component.get("render_strategy") or {}).get("subject_framework", {}) or {}).get("scene_tags", []),
                     "duration": script.get("duration", 5.0),
                     "visual_asset": asset.get("asset_path", ""),
+                    "background_decor_asset": asset.get("background_decor_path", ""),
                     "visual_mode": asset.get("mode", "none"),
+                    "background_decor_source": asset.get("background_decor_source", {}),
+                    "visual_relevance": asset.get("visual_relevance", {}),
                     "subtitle_safe_area": {
                         "x": 100,
                         "y": 850,
@@ -1463,6 +1917,10 @@ class QAAgent:
             }
         )
 
+        visual_relevance_check = self.check_visual_relevance(render_plan)
+        checks.append(visual_relevance_check)
+        checks.append(self.check_image_content_audit(render_plan))
+
         components = [item.get("component") for item in render_plan.get("slides", []) if item.get("component")]
         checks.append(
             {
@@ -1483,9 +1941,13 @@ class QAAgent:
 
         timing_check = self.check_subtitle_timing(ctx.project, final_video)
         checks.append(timing_check)
+        checks.append(self.check_audio_slide_sync(ctx, render_plan))
 
         preflight_check = self.check_preflight_risks(ctx.project)
         checks.append(preflight_check)
+
+        contamination_check = self.check_template_contamination(ctx, render_plan)
+        checks.append(contamination_check)
 
         script_slide_count = len(read_json(ctx.project / "video_script_plan.json", {}).get("slides", []))
         render_slide_count = len(render_plan.get("slides", []))
@@ -1525,6 +1987,8 @@ class QAAgent:
         elif any(item["status"] == "warn" for item in checks):
             overall = "warn"
 
+        preview_quality_path = self.write_preview_quality_report(ctx, render_plan, checks)
+
         path = write_json(ctx.project / "video_qa_report.json", {
             "project": ctx.project.name,
             "generated_at": now_iso(),
@@ -1534,9 +1998,164 @@ class QAAgent:
         return RoleResult(
             self.name,
             "completed",
-            outputs={"qa_report": str(path), "qa_frames": ", ".join(frame_paths)},
+            outputs={
+                "qa_report": str(path),
+                "preview_quality_report": str(preview_quality_path),
+                "qa_frames": ", ".join(frame_paths),
+            },
             metrics={"overall": overall},
         )
+
+    @staticmethod
+    def check_visual_relevance(render_plan: dict[str, Any]) -> dict[str, Any]:
+        issues: list[dict[str, Any]] = []
+        for item in render_plan.get("slides", []):
+            if not item.get("visual_asset"):
+                continue
+            audit = item.get("visual_relevance") or {}
+            if audit and audit.get("accepted") is False:
+                issues.append(
+                    {
+                        "slide_number": item.get("slide_number"),
+                        "score": audit.get("score"),
+                        "reason": audit.get("reason"),
+                        "query": audit.get("query"),
+                    }
+                )
+            elif item.get("visual_mode") == "search" and not audit:
+                issues.append(
+                    {
+                        "slide_number": item.get("slide_number"),
+                        "reason": "searched visual has no relevance audit",
+                    }
+                )
+        return {
+            "id": "visual_relevance_audit",
+            "status": "pass" if not issues else "warn",
+            "detail": issues[:12],
+        }
+
+    @staticmethod
+    def check_image_content_audit(render_plan: dict[str, Any]) -> dict[str, Any]:
+        issues: list[dict[str, Any]] = []
+        for item in render_plan.get("slides", []):
+            if not item.get("visual_asset"):
+                continue
+            audit = item.get("visual_relevance") or {}
+            content = audit.get("content") or audit.get("image_content_audit") or {}
+            if content and content.get("accepted") is False:
+                issues.append(
+                    {
+                        "slide_number": item.get("slide_number"),
+                        "score": content.get("score"),
+                        "reason": content.get("reason"),
+                        "tags": content.get("tags"),
+                    }
+                )
+            elif item.get("visual_mode") in {"search", "generate"} and not content:
+                issues.append(
+                    {
+                        "slide_number": item.get("slide_number"),
+                        "reason": "visual asset has no pixel-level content audit",
+                    }
+                )
+        return {
+            "id": "image_content_audit",
+            "status": "pass" if not issues else "warn",
+            "detail": issues[:12],
+        }
+
+    @staticmethod
+    def check_template_contamination(ctx: AgentContext, render_plan: dict[str, Any]) -> dict[str, Any]:
+        scripts = {
+            int(item.get("slide_number", 0)): item
+            for item in read_json(ctx.project / "video_script_plan.json", {}).get("slides", [])
+            if item.get("slide_number")
+        }
+        humanities_leaks = ("根号", "平方根", "定义域", "验根", "代入", "公式", "计算", "F = μN", "条件是否满足")
+        stem_leaks = ("文本细读", "意象", "母亲形象", "史铁生", "我与地坛", "地坛")
+        issues: list[dict[str, Any]] = []
+        for item in render_plan.get("slides", []):
+            slide_number = int(item.get("slide_number", 0) or 0)
+            title = str(item.get("title") or "")
+            script = scripts.get(slide_number, {})
+            script_lines = [script.get("voiceover", "")]
+            for chunk in script.get("subtitle_chunks", []) or []:
+                if isinstance(chunk, dict):
+                    script_lines.append(str(chunk.get("text") or ""))
+            source_lines = source_slide_lines(ctx.project, slide_number)
+            framework = framework_for_qa_slide(
+                title,
+                source_lines + script_lines,
+                slide_number,
+                item.get("subject_framework") or {},
+            )
+            family = framework.get("family", "general")
+            subject = framework.get("subject", "general")
+            text = " ".join([title, *source_lines, *script_lines])
+            component = item.get("component", "")
+            flags: list[str] = []
+            if family == "humanities":
+                flags.extend([term for term in humanities_leaks if term and term in text])
+                if component in STEM_ONLY_COMPONENTS:
+                    flags.append(f"STEM-only component: {component}")
+            elif family == "stem":
+                flags.extend([term for term in stem_leaks if term and term in text])
+                if component in HUMANITIES_ONLY_COMPONENTS and subject not in {"literature", "history"}:
+                    flags.append(f"humanities-only component: {component}")
+            if flags:
+                issues.append(
+                    {
+                        "slide_number": slide_number,
+                        "subject": subject,
+                        "family": family,
+                        "component": component,
+                        "flags": sorted(set(flags))[:8],
+                    }
+                )
+        return {
+            "id": "template_contamination",
+            "status": "pass" if not issues else "warn",
+            "detail": issues[:12],
+        }
+
+    @staticmethod
+    def write_preview_quality_report(
+        ctx: AgentContext,
+        render_plan: dict[str, Any],
+        checks: list[dict[str, Any]],
+    ) -> Path:
+        subject_counts: dict[str, int] = {}
+        semantic_page_counts: dict[str, int] = {}
+        component_counts: dict[str, int] = {}
+        for item in render_plan.get("slides", []):
+            framework = item.get("subject_framework") or {}
+            subject = framework.get("subject") or "general"
+            semantic_page_type = framework.get("page_type") or framework.get("scene") or "concept"
+            component = item.get("component") or "unknown"
+            subject_counts[subject] = subject_counts.get(subject, 0) + 1
+            semantic_page_counts[semantic_page_type] = semantic_page_counts.get(semantic_page_type, 0) + 1
+            component_counts[component] = component_counts.get(component, 0) + 1
+        preflight = read_json(ctx.project / "preflight_report.json", {})
+        summary = preflight.get("summary", {}) if isinstance(preflight, dict) else {}
+        payload = {
+            "project": ctx.project.name,
+            "generated_at": now_iso(),
+            "style": ctx.args.style,
+            "preview_slides": ctx.args.preview_slides,
+            "subject_mix": subject_counts,
+            "semantic_page_mix": semantic_page_counts,
+            "component_mix": component_counts,
+            "preflight_summary": summary,
+            "preview_first_recommended": bool(summary.get("preview_first_recommended")),
+            "image_content_audit": next((c for c in checks if c.get("id") == "image_content_audit"), {}),
+            "visual_relevance": next((c for c in checks if c.get("id") == "visual_relevance_audit"), {}),
+            "template_contamination": next((c for c in checks if c.get("id") == "template_contamination"), {}),
+            "component_variety": next((c for c in checks if c.get("id") == "component_variety"), {}),
+            "subtitle_timing": next((c for c in checks if c.get("id") == "subtitle_timing"), {}),
+            "audio_slide_sync": next((c for c in checks if c.get("id") == "audio_slide_sync"), {}),
+        }
+        return write_json(ctx.project / "preview_quality_report.json", payload)
 
     @staticmethod
     def find_duplicate_subtitles(project: Path) -> list[dict[str, Any]]:
@@ -1604,6 +2223,50 @@ class QAAgent:
                 "overlaps": overlaps[:10],
                 "subtitle_file": str(srt_candidates[0]),
             },
+        }
+
+    @staticmethod
+    def check_audio_slide_sync(ctx: AgentContext, render_plan: dict[str, Any]) -> dict[str, Any]:
+        issues: list[dict[str, Any]] = []
+        _, final_name = rendered_output_names(ctx.args.style, ctx.args.preview_slides)
+        qa_path = ctx.project / "exports" / ((final_name or "").replace(".mp4", "_qa.json") or f"{ctx.project.name}_final_qa.json")
+        renderer_qa = read_json(qa_path, {}) if qa_path.exists() else {}
+        rendered = {
+            int(item.get("slide", 0)): float(item.get("duration", 0.0) or 0.0)
+            for item in renderer_qa.get("rendered_slides", [])
+            if item.get("slide")
+        } if isinstance(renderer_qa, dict) else {}
+        for item in render_plan.get("slides", []):
+            slide_number = int(item.get("slide_number", 0) or 0)
+            audio_path = ctx.project / "audio" / f"page_{slide_number:02d}.mp3"
+            audio_duration = ffprobe_duration(audio_path) or 0.0
+            planned_duration = float(item.get("duration", 0.0) or 0.0)
+            rendered_duration = rendered.get(slide_number, 0.0)
+            if audio_duration <= 0:
+                issues.append({"slide_number": slide_number, "reason": "missing audio duration"})
+                continue
+            if planned_duration and abs(planned_duration - audio_duration) > 0.35:
+                issues.append(
+                    {
+                        "slide_number": slide_number,
+                        "planned_duration": round(planned_duration, 3),
+                        "audio_duration": round(audio_duration, 3),
+                        "delta": round(planned_duration - audio_duration, 3),
+                    }
+                )
+            if rendered_duration and abs(rendered_duration - audio_duration) > 0.45:
+                issues.append(
+                    {
+                        "slide_number": slide_number,
+                        "rendered_duration": round(rendered_duration, 3),
+                        "audio_duration": round(audio_duration, 3),
+                        "delta": round(rendered_duration - audio_duration, 3),
+                    }
+                )
+        return {
+            "id": "audio_slide_sync",
+            "status": "pass" if not issues else "warn",
+            "detail": issues[:12],
         }
 
     @staticmethod
@@ -1700,10 +2363,43 @@ class QAAgent:
                 stat = ImageStat.Stat(image)
                 mean = stat.mean[0]
                 stddev = stat.stddev[0]
+                pixels = list(image.getdata())
+                w, h = image.size
+                edge_hits = 0
+                comparisons = 0
+                for y in range(h):
+                    for x in range(w - 1):
+                        if abs(pixels[y * w + x] - pixels[y * w + x + 1]) > 34:
+                            edge_hits += 1
+                        comparisons += 1
+                bottom = image.crop((0, int(h * 0.78), w, h))
+                bottom_stat = ImageStat.Stat(bottom)
+                bottom_stddev = bottom_stat.stddev[0]
+                edge_density = edge_hits / max(1, comparisons)
             except Exception:
                 continue
-            if stddev < 4 or mean > 252:
-                issues.append({"path": str(path), "mean": round(mean, 2), "stddev": round(stddev, 2)})
+            flags: list[str] = []
+            if stddev < 4:
+                flags.append("near_blank_or_low_contrast")
+            if mean > 252:
+                flags.append("over_bright")
+            if mean < 8:
+                flags.append("too_dark")
+            if edge_density < 0.006:
+                flags.append("too_little_visual_detail")
+            if bottom_stddev > 72:
+                flags.append("busy_bottom_subtitle_area")
+            if flags:
+                issues.append(
+                    {
+                        "path": str(path),
+                        "mean": round(mean, 2),
+                        "stddev": round(stddev, 2),
+                        "edge_density": round(edge_density, 4),
+                        "bottom_stddev": round(bottom_stddev, 2),
+                        "flags": flags,
+                    }
+                )
         return issues
 
 
@@ -1730,6 +2426,27 @@ class DirectorAgent:
             ctx.add_result(result)
             result = preflight.run(ctx, slide_ir)
             ctx.add_result(result)
+            if (
+                ctx.args.auto_preview_first
+                and ctx.args.render
+                and not ctx.args.preview_slides
+                and not ctx.args.confirm_full_render
+            ):
+                preflight_payload = read_json(ctx.project / "preflight_report.json", {})
+                summary = preflight_payload.get("summary", {}) if isinstance(preflight_payload, dict) else {}
+                if summary.get("preview_first_recommended"):
+                    ctx.args.preview_slides = int(summary.get("preview_slides") or min(5, len(slide_ir)))
+                    ctx.add_result(
+                        RoleResult(
+                            "PreviewFirstGate",
+                            "completed",
+                            notes=[
+                                "Preflight recommended preview-first; rendering limited preview. "
+                                "Use --confirm-full-render for the full video."
+                            ],
+                            metrics={"preview_slides": ctx.args.preview_slides, "total_slides": len(slide_ir)},
+                        )
+                    )
             working_slide_ir = limit_slides(slide_ir, ctx.args.preview_slides)
             if ctx.args.preview_slides:
                 preview_path = write_json(
@@ -1786,6 +2503,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--render", action="store_true", help="Generate the video after planning")
     parser.add_argument("--style", default="adaptive", help="Renderer style passed to ppt_to_video.py")
     parser.add_argument("--preview-slides", type=int, default=None, help="Only plan/render the first N slides for fast preview")
+    parser.add_argument("--auto-preview-first", action="store_true", help="Render a short preview first when preflight finds risky slides")
+    parser.add_argument("--confirm-full-render", action="store_true", help="Allow full render even when --auto-preview-first recommends preview")
     parser.add_argument("--force-render", action="store_true", help="Ignore renderer segment cache")
     parser.add_argument("--execute-assets", action="store_true", help="Allow image search/generation during asset curation")
     parser.add_argument("--skip-assets", action="store_true", help="Do not run visual_asset_planner.py when assets are missing")

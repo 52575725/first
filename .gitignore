@@ -175,5 +175,6 @@ projects/*
 api_jobs/
 
 # Local runtime bundles and data
+/assets/visual_cache/
 /tools/python_libs/
 /tools/tessdata/

@@ -168,6 +168,66 @@ def compact_voiceover(text: str, max_chars: int) -> str:
     return text[:max_chars]
 
 
+def prepare_tts_text(text: str, framework: dict | None = None, pause_hints: list[str] | None = None) -> str:
+    """Add deterministic pauses so neural TTS sounds less like a flat read."""
+    framework = framework or {}
+    pause_hints = pause_hints or []
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if not text:
+        return ""
+
+    replacements = [
+        ("先", "先，"),
+        ("再", "再，"),
+        ("最后", "最后，"),
+        ("也就是说", "也就是说，"),
+        ("换句话说", "换句话说，"),
+        ("例如", "例如，"),
+        ("注意", "注意，"),
+    ]
+    for before, after in replacements:
+        text = text.replace(after, before)
+        text = text.replace(before, after)
+
+    scene = framework.get("scene", "")
+    if scene in {"quote_analysis", "close_reading", "character_analysis"}:
+        text = text.replace("原文", "原文，").replace("证据", "证据，")
+    elif scene in {"formula", "definition", "example", "exercise", "derivation"}:
+        text = text.replace("条件", "条件，").replace("结果", "结果，")
+    elif scene in {"experiment", "variable_control"}:
+        text = text.replace("变量", "变量，").replace("结论", "结论，")
+
+    text = re.sub(r"，{2,}", "，", text)
+    text = re.sub(r"。{2,}", "。", text)
+    text = re.sub(r"，([。！？；])", r"\1", text)
+    text = re.sub(r"([。！？；])([^。！？；]{34,})，", r"\1\2，", text)
+
+    sentences = re.split(r"(?<=[。！？!?；;])", text)
+    balanced: list[str] = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) > 70 and "，" in sentence:
+            parts = [part for part in sentence.split("，") if part]
+            current = ""
+            for part in parts:
+                candidate = f"{current}，{part}" if current else part
+                if len(candidate) > 44 and current:
+                    balanced.append(current + "。")
+                    current = part
+                else:
+                    current = candidate
+            if current:
+                balanced.append(current if current[-1] in "。！？；;" else current + "。")
+        else:
+            balanced.append(sentence if sentence[-1] in "。！？；;" else sentence + "。")
+
+    if "after_transition" in pause_hints and len(balanced) >= 2:
+        balanced[0] = balanced[0].rstrip("。") + "。"
+    return "".join(balanced)
+
+
 def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True)
 
@@ -239,12 +299,24 @@ def main() -> int:
         slide_number = int(slide.get("slide_number", len(outputs) + 1))
         mp3_path = audio_dir / f"page_{slide_number:02d}.mp3"
         if mp3_path.exists() and mp3_path.stat().st_size > 1024 and not args.force:
-            outputs.append({"slide_number": slide_number, "path": str(mp3_path), "status": "exists"})
+            outputs.append(
+                {
+                    "slide_number": slide_number,
+                    "path": str(mp3_path),
+                    "status": "exists",
+                    "script_style": slide.get("script_style", ""),
+                }
+            )
             continue
         if mp3_path.exists() and mp3_path.stat().st_size <= 1024:
             mp3_path.unlink()
 
-        voiceover = compact_voiceover(slide.get("voiceover", ""), args.max_chars)
+        raw_voiceover = compact_voiceover(slide.get("tts_voiceover") or slide.get("voiceover", ""), args.max_chars)
+        voiceover = prepare_tts_text(
+            raw_voiceover,
+            framework=slide.get("subject_framework") or {},
+            pause_hints=slide.get("pause_hints") or [],
+        )
         if not voiceover:
             outputs.append({"slide_number": slide_number, "path": "", "status": "skipped_empty"})
             continue
@@ -279,6 +351,8 @@ def main() -> int:
                     "status": "ready",
                     "duration": round(probe_duration(mp3_path), 2),
                     "chars": len(voiceover),
+                    "raw_chars": len(raw_voiceover),
+                    "script_style": slide.get("script_style", ""),
                 }
             )
             continue
@@ -354,6 +428,8 @@ def main() -> int:
                 "status": "ready",
                 "duration": round(probe_duration(mp3_path), 2),
                 "chars": len(voiceover),
+                "raw_chars": len(raw_voiceover),
+                "script_style": slide.get("script_style", ""),
             }
         )
 
@@ -364,6 +440,7 @@ def main() -> int:
         "edge_rate": args.edge_rate,
         "edge_pitch": args.edge_pitch,
         "rate": args.rate,
+        "pacing": "deterministic punctuation normalization",
         "outputs": outputs,
     }
     manifest_path = project / "audio" / "script_audio_manifest.json"

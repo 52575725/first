@@ -30,6 +30,7 @@ CONFIG_ARG_MAP = {
     "qa_frames": ("--qa-frames",),
     "render_timeout": ("--render-timeout",),
     "audio_timeout": ("--audio-timeout",),
+    "jobs": ("--jobs",),
     "qa_each_slide": ("--qa-each-slide",),
 }
 
@@ -84,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-file", type=Path, help="读取项目配置 JSON；默认使用项目目录 project_config.json")
     parser.add_argument("--projects-dir", type=Path, default=REPO_ROOT / "projects", help="项目输出根目录")
     parser.add_argument("--format", default="ppt169", help="画布格式")
-    parser.add_argument("--style", default="adaptive", help="视频渲染风格")
+    parser.add_argument("--style", default="micro-course", help="视频渲染风格")
     parser.add_argument("--no-render", action="store_true", help="只生成规划文件，不渲染 MP4")
     parser.add_argument("--execute-assets", action="store_true", help="允许执行图片搜索/生成")
     parser.add_argument("--skip-assets", action="store_true", help="跳过视觉素材规划")
@@ -101,8 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force-render", action="store_true", help="忽略渲染缓存，强制重绘所有片段")
     parser.add_argument("--qa-each-slide", action="store_true", help="为每页抽取 QA 截图")
     parser.add_argument("--qa-frames", type=int, default=3, help="渲染后抽取的 QA 截图数量")
-    parser.add_argument("--render-timeout", type=int, default=1200, help="渲染超时时间，秒")
+    parser.add_argument("--render-timeout", type=int, default=3600, help="渲染超时时间，秒")
     parser.add_argument("--audio-timeout", type=int, default=900, help="音频生成超时时间，秒")
+    parser.add_argument("--jobs", type=int, default=3, help="并行渲染片段数")
     parser.add_argument("--move-source", action="store_true", help="导入源文件时移动而不是复制")
     parser.add_argument("--output", type=Path, help="额外复制一份最终 MP4 到指定路径")
     return parser
@@ -142,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         qa_frames=args.qa_frames,
         render_timeout=args.render_timeout,
         audio_timeout=args.audio_timeout,
+        jobs=args.jobs,
         copy_source=not args.move_source,
         output_path=args.output,
     )

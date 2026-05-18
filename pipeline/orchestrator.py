@@ -38,7 +38,7 @@ class PipelineConfig:
     projects_dir: Path = PROJECTS_DIR
     canvas_format: str = "ppt169"
     render: bool = True
-    style: str = "adaptive"
+    style: str = "micro-course"
     execute_assets: bool = False
     skip_assets: bool = False
     asset_limit: int | None = None
@@ -54,8 +54,9 @@ class PipelineConfig:
     ensure_subtitles: bool = True
     qa_each_slide: bool = False
     qa_frames: int = 3
-    render_timeout: int = 1200
+    render_timeout: int = 3600
     audio_timeout: int = 900
+    jobs: int = 3
     copy_source: bool = True
     output_path: Path | None = None
     extra_director_args: list[str] = field(default_factory=list)
@@ -214,6 +215,8 @@ class UnifiedVideoPipeline:
             command.append("--skip-assets")
         if self.config.asset_limit is not None:
             command.extend(["--asset-limit", str(self.config.asset_limit)])
+        if self.config.jobs:
+            command.extend(["--jobs", str(self.config.jobs)])
         if self.config.force_audio:
             command.append("--force-audio")
         if self.config.force_render:
@@ -296,6 +299,7 @@ class UnifiedVideoPipeline:
             "qa_each_slide": self.config.qa_each_slide,
             "render_timeout": self.config.render_timeout,
             "audio_timeout": self.config.audio_timeout,
+            "jobs": self.config.jobs,
             "updated_at": now_iso(),
         }
         project.mkdir(parents=True, exist_ok=True)
@@ -333,6 +337,7 @@ class UnifiedVideoPipeline:
                 "ensure_subtitles": self.config.ensure_subtitles,
                 "qa_each_slide": self.config.qa_each_slide,
                 "qa_frames": self.config.qa_frames,
+                "jobs": self.config.jobs,
             },
             "commands": self.run_log,
         }

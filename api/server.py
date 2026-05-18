@@ -256,7 +256,7 @@ async def create_job(
     project_path: str | None = Form(default=None),
     project_name: str | None = Form(default=None),
     render: bool = Form(default=True),
-    style: str = Form(default="adaptive"),
+    style: str = Form(default="micro-course"),
     execute_assets: bool = Form(default=False),
     skip_assets: bool = Form(default=False),
     asset_limit: int | None = Form(default=None),
@@ -272,8 +272,9 @@ async def create_job(
     ensure_subtitles: bool = Form(default=True),
     qa_each_slide: bool = Form(default=False),
     qa_frames: int = Form(default=3),
-    render_timeout: int = Form(default=1200),
+    render_timeout: int = Form(default=3600),
     audio_timeout: int = Form(default=900),
+    jobs: int = Form(default=3),
 ) -> JobSummary:
     if file is None and not project_path:
         raise HTTPException(status_code=400, detail="Provide either an uploaded file or project_path")
@@ -335,6 +336,7 @@ async def create_job(
         qa_frames=qa_frames,
         render_timeout=render_timeout,
         audio_timeout=audio_timeout,
+        jobs=jobs,
         copy_source=True,
     )
     _executor.submit(run_pipeline_job, job_id, config)

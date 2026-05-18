@@ -1869,6 +1869,8 @@ class RendererAgent:
             command.extend(["--preview-slides", str(ctx.args.preview_slides)])
         if ctx.args.force_render:
             command.append("--force-render")
+        if ctx.args.jobs:
+            command.extend(["--jobs", str(ctx.args.jobs)])
         result = run_command(command, SCRIPT_DIR, timeout=ctx.args.render_timeout)
         if not result["ok"]:
             raise RuntimeError(result["stderr"] or "ppt_to_video.py failed")
@@ -2510,7 +2512,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-assets", action="store_true", help="Do not run visual_asset_planner.py when assets are missing")
     parser.add_argument("--asset-limit", type=int, default=None, help="Limit executed asset downloads/generations")
     parser.add_argument("--asset-timeout", type=int, default=600, help="Asset planning timeout in seconds")
-    parser.add_argument("--render-timeout", type=int, default=1200, help="Renderer timeout in seconds")
+    parser.add_argument("--render-timeout", type=int, default=3600, help="Renderer timeout in seconds")
+    parser.add_argument("--jobs", type=int, default=None, help="Renderer slide jobs passed to ppt_to_video.py")
     parser.add_argument("--no-generate-audio", action="store_true", help="Do not generate local TTS audio before rendering")
     parser.add_argument("--force-audio", action="store_true", help="Regenerate page audio even if audio files already exist")
     parser.add_argument("--audio-timeout", type=int, default=900, help="Narration audio generation timeout in seconds")

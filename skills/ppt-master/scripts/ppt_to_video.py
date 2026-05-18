@@ -32,7 +32,15 @@ VIDEO_W = 1920
 VIDEO_H = 1080
 MIN_SEGMENT_BYTES = 32 * 1024
 SUBTITLE_AUDIO_LEAD_SECONDS = 0.32
+RENDER_CACHE_VERSION = 66
+FFMPEG_START_SPACING_SECONDS = 0.18
+MICRO_COURSE_BACKGROUND_DECOR_PROFILE = {
+    "humanities": {"cover_opacity": 0.42, "wash_opacity": 0.62},
+    "default": {"cover_opacity": 0.34, "wash_opacity": 0.68},
+}
 RENDER_CONTEXT = threading.local()
+FFMPEG_START_LOCK = threading.Lock()
+LAST_FFMPEG_START_AT = 0.0
 
 
 def ensure_media_tools_on_path():
@@ -6999,12 +7007,11 @@ def micro_course_canvas(duration, project=None, slide_num=0, slide_data=None):
     layer_num = 0
     family = framework.get("family", "general")
     if slide_background_decor_asset(project, slide_num):
-        cover_opacity = 0.045 if family == "humanities" else 0.035
-        wash_opacity = 0.84 if family == "humanities" else 0.88
-        edge_opacity = 0.12 if family == "humanities" else 0.085
+        decor_profile = micro_course_background_decor_profile(family)
+        cover_opacity = decor_profile["cover_opacity"]
+        wash_opacity = decor_profile["wash_opacity"]
         current, layer_num = add_filter_background_decor(filters, current, layer_num, opacity=cover_opacity, start=0.0)
         current, layer_num = add_filter_drawbox(filters, current, layer_num, (0, 0, VIDEO_W, VIDEO_H), f"white@{wash_opacity:.2f}", "fill", 0.0)
-        current, layer_num = add_filter_background_edge_decor(filters, current, layer_num, opacity=edge_opacity, start=0.0, variant=slide_num)
     elif micro_course_visual_asset(project, slide_num, slide_data):
         wash_opacity = 0.76 if family == "humanities" else 0.84
         current, layer_num = add_filter_visual_cover(filters, current, layer_num, box=(0, 0, VIDEO_W, VIDEO_H), opacity=0.10, start=0.0)
@@ -7712,15 +7719,49 @@ def write_process_log(log_path, cmd, result, cwd=None, context=""):
     log_path.write_text("\n".join(content), encoding="utf-8", errors="ignore")
 
 
+def _spawn_process(cmd, cwd=None):
+    global LAST_FFMPEG_START_AT
+    with FFMPEG_START_LOCK:
+        elapsed = time.monotonic() - LAST_FFMPEG_START_AT
+        if elapsed < FFMPEG_START_SPACING_SECONDS:
+            time.sleep(FFMPEG_START_SPACING_SECONDS - elapsed)
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        LAST_FFMPEG_START_AT = time.monotonic()
+        return process
+
+
 def run_subprocess(cmd, cwd=None, log_path=None, context=""):
-    result = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-    )
+    attempts = 4 if cmd and Path(str(cmd[0])).name.lower().startswith("ffmpeg") else 1
+    last_exc = None
+    result = None
+    for attempt in range(attempts):
+        try:
+            process = _spawn_process(cmd, cwd=cwd)
+            stdout, stderr = process.communicate()
+            result = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+            break
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt + 1 >= attempts:
+                result = subprocess.CompletedProcess(cmd, -1, "", repr(exc))
+                break
+            time.sleep(0.45 * (attempt + 1))
+        except OSError as exc:
+            last_exc = exc
+            if getattr(exc, "winerror", None) != 5 or attempt + 1 >= attempts:
+                result = subprocess.CompletedProcess(cmd, -1, "", repr(exc))
+                break
+            time.sleep(0.45 * (attempt + 1))
+    if result is None:
+        result = subprocess.CompletedProcess(cmd, -1, "", repr(last_exc))
     if log_path or result.returncode != 0:
         write_process_log(log_path, cmd, result, cwd=cwd, context=context)
     if result.returncode != 0:
@@ -8729,7 +8770,11 @@ def load_render_manifest(temp_dir, style_slug):
 
 
 def save_render_manifest(path, manifest):
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 def file_fingerprint(path):
@@ -8739,16 +8784,32 @@ def file_fingerprint(path):
     return {"path": str(Path(path)), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
+def micro_course_background_decor_profile(family):
+    if family in MICRO_COURSE_BACKGROUND_DECOR_PROFILE:
+        return MICRO_COURSE_BACKGROUND_DECOR_PROFILE[family]
+    return MICRO_COURSE_BACKGROUND_DECOR_PROFILE["default"]
+
+
 def slide_render_key(project, slide_num, slide_data, audio, recommendation, duration, style):
     art = slide_art_asset(project, slide_num)
     visual = micro_course_visual_asset(project, slide_num, slide_data) if style == "micro-course" else slide_visual_asset_for_layout(project, slide_num, slide_data)
+    background_decor = slide_background_decor_asset(project, slide_num)
+    family = "general"
+    if style == "micro-course":
+        try:
+            framework, _ = micro_course_theme(slide_num=slide_num, slide_data=slide_data, project=project)
+            family = framework.get("family", "general")
+        except Exception:
+            family = "general"
     payload = {
-        "version": 64,
+        "version": RENDER_CACHE_VERSION,
         "slide_number": slide_num,
         "slide": slide_data,
         "source_lines": source_slide_lines(project, slide_num),
         "slide_art": file_fingerprint(art),
         "visual_asset": file_fingerprint(visual),
+        "background_decor": file_fingerprint(background_decor),
+        "background_decor_profile": micro_course_background_decor_profile(family) if style == "micro-course" else None,
         "audio": file_fingerprint(audio),
         "recommendation": recommendation,
         "duration": round(float(duration), 3),
@@ -8844,6 +8905,16 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    def persist_segment_manifest():
+        save_render_manifest(manifest_path, {
+            "project": project.name,
+            "style": config.style,
+            "preview_slides": args.preview_slides,
+            "cache_version": RENDER_CACHE_VERSION,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "segments": segment_cache,
+        })
+
     print(f"生成智能布局视频 ({len(slides)} 页)...")
     if recommendations:
         print(f"已加载组件推荐: {len(recommendations)} 页")
@@ -8914,6 +8985,7 @@ def main():
                 }
                 if cached_path.resolve() != cache_segment.resolve():
                     atomic_copy_file(cached_path, cache_segment, run_id)
+                persist_segment_manifest()
                 print(render_result_message(result, len(slides)))
             else:
                 print(f"[{i}/{len(slides)}] cached segment invalid ({reason}); re-rendering")
@@ -8940,6 +9012,7 @@ def main():
                     "layout": result["layout"],
                     "duration": result["actual_duration"],
                 }
+                persist_segment_manifest()
                 print(render_result_message(result, len(slides)))
 
     ordered_results = [results_by_slide[i] for i in sorted(results_by_slide)]
@@ -9026,6 +9099,8 @@ def main():
         "project": project.name,
         "style": config.style,
         "preview_slides": args.preview_slides,
+        "cache_version": RENDER_CACHE_VERSION,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "segments": segment_cache,
     }
     save_render_manifest(manifest_path, render_manifest)

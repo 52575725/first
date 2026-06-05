@@ -18,6 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+for stream_name in ("stdout", "stderr"):
+    stream = getattr(sys, stream_name, None)
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 try:
     from project_utils import (
         CANVAS_FORMATS,

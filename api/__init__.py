@@ -1,1 +1,1 @@
-"""HTTP API package for PPT Master."""
+"""HTTP API package for the micro-course video pipeline."""

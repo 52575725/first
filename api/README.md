@@ -1,54 +1,50 @@
-# PPT Master API
+# 微课视频 API
 
-This API is a thin HTTP wrapper around `pipeline.UnifiedVideoPipeline`.
+本目录提供一个基于 FastAPI 的本地接口层，用于提交微课视频生成任务、轮询进度和下载产物。
 
-For frontend integration details, see [API_CONTRACT.md](./API_CONTRACT.md).
-
-## Install
+## 启动
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Run
-
-```bash
 python -m uvicorn api.server:app --host 127.0.0.1 --port 8000
 ```
 
-Open:
+启动后可访问：
 
-- `http://127.0.0.1:8000/docs` for Swagger UI
-- `http://127.0.0.1:8000/health` for health check
+- `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/health`
+- `GET /api/stages`
 
-## Create a Job
+## 创建任务
 
-Upload a source file:
+上传源文件：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/jobs ^
-  -F "file=@inputs/example.pptx" ^
+  -F "file=@inputs/demo.pptx" ^
   -F "render=true" ^
-  -F "style=adaptive"
+  -F "style=micro-course"
 ```
 
-Reuse an existing project:
+复用已有项目：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/jobs ^
-  -F "project_path=C:\Users\魏旭浩\ppt-master\projects\your_project" ^
+  -F "project_path=C:\path\to\projects\friction_micro_course_demo" ^
   -F "render=true"
 ```
 
-## Poll and Download
+## 查询任务
 
 ```bash
 curl http://127.0.0.1:8000/api/jobs/<job_id>
 curl http://127.0.0.1:8000/api/jobs/<job_id>/outputs
 ```
 
-Download final video:
+下载最终视频：
 
 ```bash
 curl -L -o final.mp4 http://127.0.0.1:8000/api/jobs/<job_id>/download/final_video_path
 ```
+
+完整字段定义见 [API_CONTRACT.md](./API_CONTRACT.md)。

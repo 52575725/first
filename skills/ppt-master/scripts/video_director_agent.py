@@ -161,19 +161,39 @@ def read_json(path: Path, default: Any = None) -> Any:
 
 
 def run_command(args: list[str], cwd: Path, *, timeout: int | None = None) -> dict[str, Any]:
-    result = subprocess.run(
-        args,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        result = subprocess.run(
+            args,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        message = f"command timed out after {timeout} seconds: {' '.join(str(item) for item in args)}"
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": stdout,
+            "stderr": "\n".join(part for part in [stderr, message] if part),
+            "command": [str(item) for item in args],
+            "timed_out": True,
+        }
     return {
         "ok": result.returncode == 0,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
         "command": [str(item) for item in args],
+        "timed_out": False,
     }
 
 
@@ -1701,17 +1721,21 @@ class AssetCuratorAgent:
                 command.extend(["--limit", str(ctx.args.asset_limit)])
             result = run_command(command, SCRIPT_DIR.parent.parent, timeout=ctx.args.asset_timeout)
             if not result["ok"]:
-                if ctx.args.execute_assets:
-                    raise RuntimeError(result["stderr"] or "visual_asset_planner.py failed")
-                notes.append("background decor search failed; continuing with local fallback.")
+                reason = "timed out" if result.get("timed_out") else "failed"
+                detail = (result.get("stderr") or result.get("stdout") or "").strip()
+                notes.append(
+                    f"visual_asset_planner.py {reason}; continuing with local/component fallback."
+                    + (f" Detail: {detail[-300:]}" if detail else "")
+                )
             else:
                 notes.append("visual_asset_planner.py executed search/generation.")
         elif not existing_assets and not manifest_path.exists() and not ctx.args.skip_assets:
             command = [sys.executable, str(SCRIPT_DIR / "visual_asset_planner.py"), str(ctx.project)]
             result = run_command(command, SCRIPT_DIR.parent.parent, timeout=ctx.args.asset_timeout)
             if not result["ok"]:
-                raise RuntimeError(result["stderr"] or "visual_asset_planner.py dry-run failed")
-            notes.append("No selected visual assets found; wrote a dry-run visual asset plan.")
+                notes.append("visual_asset_planner.py dry-run failed; continuing without web assets.")
+            else:
+                notes.append("No selected visual assets found; wrote a dry-run visual asset plan.")
         elif existing_assets:
             notes.append("Reused existing selected visual assets.")
 
@@ -2510,8 +2534,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-render", action="store_true", help="Ignore renderer segment cache")
     parser.add_argument("--execute-assets", action="store_true", help="Allow image search/generation during asset curation")
     parser.add_argument("--skip-assets", action="store_true", help="Do not run visual_asset_planner.py when assets are missing")
-    parser.add_argument("--asset-limit", type=int, default=None, help="Limit executed asset downloads/generations")
-    parser.add_argument("--asset-timeout", type=int, default=600, help="Asset planning timeout in seconds")
+    parser.add_argument("--asset-limit", type=int, default=8, help="Limit executed asset downloads/generations")
+    parser.add_argument("--asset-timeout", type=int, default=300, help="Asset planning timeout in seconds")
     parser.add_argument("--render-timeout", type=int, default=3600, help="Renderer timeout in seconds")
     parser.add_argument("--jobs", type=int, default=None, help="Renderer slide jobs passed to ppt_to_video.py")
     parser.add_argument("--no-generate-audio", action="store_true", help="Do not generate local TTS audio before rendering")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified CLI entry point for PPT Master micro-course video generation."""
+"""Unified CLI entry point for micro-course video generation."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ CONFIG_ARG_MAP = {
     "execute_assets": ("--execute-assets",),
     "skip_assets": ("--skip-assets",),
     "asset_limit": ("--asset-limit",),
+    "asset_timeout": ("--asset-timeout",),
     "voice": ("--voice",),
     "rate": ("--rate",),
     "pitch": ("--pitch",),
@@ -80,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("input", nargs="?", type=Path, help="输入 PPTX/PDF/DOCX/Markdown 等源文件")
-    parser.add_argument("--project", type=Path, help="复用已有 PPT Master 项目目录")
+    parser.add_argument("--project", type=Path, help="复用已有微课项目目录")
     parser.add_argument("--project-name", help="新建项目名，默认使用输入文件名")
     parser.add_argument("--config-file", type=Path, help="读取项目配置 JSON；默认使用项目目录 project_config.json")
     parser.add_argument("--projects-dir", type=Path, default=REPO_ROOT / "projects", help="项目输出根目录")
@@ -89,7 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-render", action="store_true", help="只生成规划文件，不渲染 MP4")
     parser.add_argument("--execute-assets", action="store_true", help="允许执行图片搜索/生成")
     parser.add_argument("--skip-assets", action="store_true", help="跳过视觉素材规划")
-    parser.add_argument("--asset-limit", type=int, help="限制素材搜索/生成数量")
+    parser.add_argument("--asset-limit", type=int, default=8, help="限制素材搜索/生成数量")
+    parser.add_argument("--asset-timeout", type=int, default=300, help="素材规划/搜索超时时间，秒")
     parser.add_argument("--voice", default="zh-CN-YunyangNeural", help="edge-tts 音色")
     parser.add_argument("--rate", default="-8%", help='edge-tts 语速，例如 "+0%%" 或 "-8%%"')
     parser.add_argument("--pitch", default="+0Hz", help='edge-tts 音调，例如 "+0Hz" 或 "-3Hz"')
@@ -130,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         execute_assets=args.execute_assets,
         skip_assets=args.skip_assets,
         asset_limit=args.asset_limit,
+        asset_timeout=args.asset_timeout,
         preview_slides=args.preview,
         force_render=args.force_render,
         force_audio=args.force_audio,
@@ -149,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         output_path=args.output,
     )
 
-    print("PPT Master 微课视频统一流水线")
+    print("智能微课视频生成系统")
     if config.input_path:
         print(f"  输入: {config.input_path}")
     if config.project_path:

@@ -1,11 +1,11 @@
-# PPT Master Dependencies / PPT Master 依赖
+# Micro-course Video Dependencies / 微课视频项目依赖
 # =============================================
 #
-# Full list lives inside the skill so installing the skill alone gives full capability.
-# 完整依赖列表已内置于 skill 内部，单独安装 skill 即可获得完整能力。
+# Full dependency list stays under the legacy skill path used by the current runtime.
+# 当前运行链路仍复用 legacy skill 路径，因此完整依赖清单保留在对应目录下。
 #
 # Install / 安装方式：
 #   pip install -r requirements.txt                     # from repo root / 仓库根目录
-#   pip install -r skills/ppt-master/requirements.txt   # from anywhere / 任意位置
+#   pip install -r skills/ppt-master/requirements.txt   # compatibility path / 兼容路径
 #
 -r skills/ppt-master/requirements.txt

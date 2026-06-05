@@ -46,6 +46,16 @@ COMPARE_RE = re.compile(
     r"(\u5bf9\u6bd4|\u4f18\u52bf|\u52a3\u52bf|\u4e0d\u540c|\bvs\b|compare)",
     re.IGNORECASE,
 )
+SOURCE_SECTION_RE = re.compile(
+    r"^(?:"
+    r"[❶❷❸❹❺❻❼❽❾❿]\s*.+|"
+    r"[一二三四五六七八九十]+[、.．]\s*.+|"
+    r"\d{1,2}[.．、]\s*.+|"
+    r"【[^】]{2,40}】.*|"
+    r"目标导学[一二三四五六七八九十\d]?.*|"
+    r".{0,16}(教学目标|重点难点|教学过程|导入新课|新课讲授|课堂总结|板书设计|教学反思).{0,16}"
+    r")$"
+)
 
 
 def clean_text(text: str) -> str:
@@ -459,12 +469,70 @@ def clean_source_markdown_line(line: str) -> str:
     line = str(line or "").strip()
     if not line:
         return ""
+    line = re.sub(r"<a\b[^>]*>\s*</a>", "", line, flags=re.IGNORECASE).strip()
+    line = re.sub(r"<[^>]+>", "", line).strip()
     if line.startswith("![") and "](" in line:
         return ""
     line = re.sub(r"!\[[^\]]*\]\(.*\)", "", line).strip()
     if SOURCE_ASSET_RE.search(line):
         return ""
+    line = re.sub(r"\\([.、])", r"\1", line)
+    line = re.sub(r"^#+\s*", "", line).strip()
+    line = re.sub(r"^[_*]{1,3}(.+?)[_*]{1,3}$", r"\1", line).strip()
+    line = re.sub(r"[_*]{2,}", "", line).strip()
+    line = re.sub(r"^[❶❷❸❹❺❻❼❽❾❿]\s*", "", line).strip()
+    line = line.strip("➷")
+    line = re.sub(r"\s+", " ", line).strip()
     return line
+
+
+def is_source_section_heading(line: str) -> bool:
+    text = clean_source_markdown_line(line).strip()
+    if not text:
+        return False
+    if len(text) > 60:
+        return False
+    return bool(SOURCE_SECTION_RE.match(text))
+
+
+def split_long_source_segment(lines: List[str], max_lines: int = 7) -> List[List[str]]:
+    if len(lines) <= max_lines + 2:
+        return [lines]
+    heading = lines[0]
+    chunks: List[List[str]] = []
+    body = lines[1:]
+    for start in range(0, len(body), max_lines):
+        chunk_body = body[start : start + max_lines]
+        if not chunk_body:
+            continue
+        if start == 0:
+            chunks.append([heading, *chunk_body])
+        else:
+            chunks.append([f"{heading}（续）", *chunk_body])
+    return chunks or [lines]
+
+
+def merge_sparse_source_segments(segments: List[List[str]]) -> List[List[str]]:
+    merged: List[List[str]] = []
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
+        sparse_heading_only = len(segment) <= 1 or (
+            len(segment) == 2
+            and all(len(item) <= 48 and is_source_section_heading(item) for item in segment)
+        )
+        if (
+            sparse_heading_only
+            and index > 0
+            and index + 1 < len(segments)
+            and len(segments[index + 1]) <= 8
+        ):
+            merged.append([*segment, *segments[index + 1]])
+            index += 2
+            continue
+        merged.append(segment)
+        index += 1
+    return merged
 
 
 def structure_from_source_lines(lines: List[str]) -> Dict[str, Any]:
@@ -507,6 +575,52 @@ def structure_from_source_lines(lines: List[str]) -> Dict[str, Any]:
     }
 
 
+def split_plain_source_markdown_slides(markdown_path: Path) -> List[Dict[str, Any]]:
+    cleaned_lines: List[str] = []
+    for raw in markdown_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        text = clean_source_markdown_line(raw)
+        if not text or text.startswith("### Speaker Notes"):
+            continue
+        cleaned_lines.append(text)
+
+    if not cleaned_lines:
+        return []
+
+    segments: List[List[str]] = []
+    current: List[str] = []
+    for text in cleaned_lines:
+        starts_new = is_source_section_heading(text)
+        if starts_new and current:
+            segments.extend(split_long_source_segment(current))
+            current = [text]
+            continue
+        current.append(text)
+        if len(current) >= 10:
+            segments.extend(split_long_source_segment(current))
+            current = []
+    if current:
+        segments.extend(split_long_source_segment(current))
+
+    if len(segments) == 1 and len(cleaned_lines) > 8:
+        segments = [
+            cleaned_lines[start : start + 7]
+            for start in range(0, len(cleaned_lines), 7)
+            if cleaned_lines[start : start + 7]
+        ]
+    else:
+        segments = merge_sparse_source_segments(segments)
+
+    slides: List[Dict[str, Any]] = []
+    for index, segment in enumerate(segments[:30], 1):
+        if not segment:
+            continue
+        structure = structure_from_source_lines(segment)
+        if not structure.get("title"):
+            continue
+        slides.append(enrich_notes_structure(structure, index, f"source_{index:02d}"))
+    return slides
+
+
 def split_source_markdown_slides(markdown_path: Path) -> List[Dict[str, Any]]:
     slides: List[Dict[str, Any]] = []
     current_number: Optional[int] = None
@@ -538,7 +652,7 @@ def split_source_markdown_slides(markdown_path: Path) -> List[Dict[str, Any]]:
             continue
         current_lines.append(line)
     flush()
-    return slides
+    return slides or split_plain_source_markdown_slides(markdown_path)
 
 
 def analyze_project(

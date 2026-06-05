@@ -1,0 +1,420 @@
+{
+  "project": "摩檫力_ppt169_20260516",
+  "generated_at": "2026-05-16T20:02:46.998785Z",
+  "slides": [
+    {
+      "slide_number": 1,
+      "base_component": "preserve_slide",
+      "selected_component": "application_storyboard",
+      "alternatives": [
+        "application_storyboard",
+        "section_title",
+        "cover_hero",
+        "problem_stack",
+        "magazine_spread"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "application_storyboard",
+        "effect_component": "application_storyboard",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 2,
+      "base_component": "preserve_slide",
+      "selected_component": "application_storyboard",
+      "alternatives": [
+        "application_storyboard",
+        "section_title",
+        "cover_hero",
+        "chart_focus",
+        "magazine_spread"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "application_storyboard",
+        "effect_component": "application_storyboard",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 3,
+      "base_component": "preserve_slide",
+      "selected_component": "section_title",
+      "alternatives": [
+        "section_title",
+        "cover_hero",
+        "chart_focus",
+        "magazine_spread",
+        "statement_focus"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "section_title",
+        "effect_component": "section_title",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 4,
+      "base_component": "preserve_slide",
+      "selected_component": "section_title",
+      "alternatives": [
+        "section_title",
+        "cover_hero",
+        "problem_stack",
+        "chart_focus",
+        "magazine_spread"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "section_title",
+        "effect_component": "section_title",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 5,
+      "base_component": "preserve_slide",
+      "selected_component": "problem_stack",
+      "alternatives": [
+        "problem_stack",
+        "metric_dashboard",
+        "chart_focus",
+        "kpi_cards",
+        "bar_chart"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "problem_stack",
+        "effect_component": "problem_stack",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 6,
+      "base_component": "preserve_slide",
+      "selected_component": "two_column_compare",
+      "alternatives": [
+        "two_column_compare",
+        "chart_focus",
+        "swot_analysis",
+        "pros_cons_chart",
+        "comparison_table"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "two_column_compare",
+        "effect_component": "two_column_compare",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 7,
+      "base_component": "preserve_slide",
+      "selected_component": "section_title",
+      "alternatives": [
+        "section_title",
+        "cover_hero",
+        "problem_stack",
+        "chart_focus",
+        "application_storyboard"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "section_title",
+        "effect_component": "section_title",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 8,
+      "base_component": "preserve_slide",
+      "selected_component": "application_storyboard",
+      "alternatives": [
+        "application_storyboard",
+        "section_title",
+        "cover_hero",
+        "chart_focus",
+        "magazine_spread"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "application_storyboard",
+        "effect_component": "application_storyboard",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 9,
+      "base_component": "preserve_slide",
+      "selected_component": "chart_focus",
+      "alternatives": [
+        "chart_focus",
+        "metric_dashboard",
+        "kpi_cards",
+        "bar_chart",
+        "donut_chart"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "chart_focus",
+        "effect_component": "chart_focus",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 10,
+      "base_component": "preserve_slide",
+      "selected_component": "section_title",
+      "alternatives": [
+        "section_title",
+        "cover_hero",
+        "magazine_spread",
+        "callout_overlay",
+        "bullet_reveal"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "section_title",
+        "effect_component": "section_title",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 11,
+      "base_component": "preserve_slide",
+      "selected_component": "section_title",
+      "alternatives": [
+        "section_title",
+        "cover_hero",
+        "problem_stack",
+        "magazine_spread",
+        "callout_overlay"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "section_title",
+        "effect_component": "section_title",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 12,
+      "base_component": "preserve_slide",
+      "selected_component": "application_storyboard",
+      "alternatives": [
+        "application_storyboard",
+        "section_title",
+        "cover_hero",
+        "problem_stack",
+        "magazine_spread"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "application_storyboard",
+        "effect_component": "application_storyboard",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 13,
+      "base_component": "preserve_slide",
+      "selected_component": "section_title",
+      "alternatives": [
+        "section_title",
+        "cover_hero",
+        "chart_focus",
+        "magazine_spread",
+        "statement_focus"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "section_title",
+        "effect_component": "section_title",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 14,
+      "base_component": "preserve_slide",
+      "selected_component": "two_column_compare",
+      "alternatives": [
+        "two_column_compare",
+        "swot_analysis",
+        "pros_cons_chart",
+        "comparison_table",
+        "comparison_columns"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "two_column_compare",
+        "effect_component": "two_column_compare",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 15,
+      "base_component": "preserve_slide",
+      "selected_component": "process_flow",
+      "alternatives": [
+        "process_flow",
+        "solution_flow",
+        "chart_focus",
+        "cycle_diagram",
+        "numbered_steps"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "process_flow",
+        "effect_component": "process_flow",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 16,
+      "base_component": "preserve_slide",
+      "selected_component": "two_column_compare",
+      "alternatives": [
+        "two_column_compare",
+        "chart_focus",
+        "swot_analysis",
+        "pros_cons_chart",
+        "comparison_table"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "two_column_compare",
+        "effect_component": "two_column_compare",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 17,
+      "base_component": "preserve_slide",
+      "selected_component": "two_column_compare",
+      "alternatives": [
+        "two_column_compare",
+        "chart_focus",
+        "swot_analysis",
+        "pros_cons_chart",
+        "comparison_table"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "two_column_compare",
+        "effect_component": "two_column_compare",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    },
+    {
+      "slide_number": 18,
+      "base_component": "preserve_slide",
+      "selected_component": "application_storyboard",
+      "alternatives": [
+        "application_storyboard",
+        "section_title",
+        "cover_hero",
+        "problem_stack",
+        "chart_focus"
+      ],
+      "confidence": 0.92,
+      "selection_source": "rules_fallback",
+      "reason": "Rules fallback chooses a content-aware recomposed component, while keeping original slide art available only as a supporting reference.",
+      "render_strategy": {
+        "base": "recompose_component",
+        "visual_effect": "application_storyboard",
+        "effect_component": "application_storyboard",
+        "subtitle_layout": "reserve",
+        "duration_multiplier": 1.0,
+        "transition": "fade"
+      }
+    }
+  ]
+}

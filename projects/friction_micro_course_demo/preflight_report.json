@@ -1,0 +1,249 @@
+{
+  "project": "摩檫力_ppt169_20260516",
+  "generated_at": "2026-05-16T20:02:46.152361Z",
+  "summary": {
+    "slides": 18,
+    "high_risk_slides": 0,
+    "medium_risk_slides": 2,
+    "page_types": {
+      "section": 11,
+      "data": 2,
+      "comparison": 4,
+      "process": 1
+    },
+    "risk_counts": {
+      "catalog_detected": 2,
+      "dense_text": 2,
+      "image_heavy": 1
+    },
+    "preview_recommended": true,
+    "preview_slides": 5
+  },
+  "slides": [
+    {
+      "slide_number": 1,
+      "title": "摩擦力",
+      "page_type": "section",
+      "text_units": 93.7,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 2,
+      "title": "CONTENTS",
+      "page_type": "section",
+      "text_units": 34.1,
+      "image_count": 1,
+      "catalog_items": [
+        "摩擦力的基本概念",
+        "摩擦力的计算与应用",
+        "摩擦力的实验探究"
+      ],
+      "risks": [
+        "catalog_detected"
+      ],
+      "severity": "low",
+      "suggestions": [
+        "目录页将自动生成连贯导读旁白。"
+      ]
+    },
+    {
+      "slide_number": 3,
+      "title": "摩擦力的基本概念",
+      "page_type": "section",
+      "text_units": 8.0,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 4,
+      "title": "定义与产生条件",
+      "page_type": "section",
+      "text_units": 196.8,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [
+        "dense_text"
+      ],
+      "severity": "medium",
+      "suggestions": [
+        "正文较密，建议使用预览模式确认字幕和版式。"
+      ]
+    },
+    {
+      "slide_number": 5,
+      "title": "分类及特点",
+      "page_type": "data",
+      "text_units": 201.5,
+      "image_count": 0,
+      "catalog_items": [
+        "分类及特点",
+        "滑动摩擦力",
+        "滚动摩擦力",
+        "手握住杯子时，杯子与手之间无相对滑动，此时产生的阻碍相对运动趋势的力即为此类力，属固体间干摩擦，具有方向与相对运动趋势相反等特点。"
+      ],
+      "risks": [
+        "catalog_detected",
+        "dense_text"
+      ],
+      "severity": "medium",
+      "suggestions": [
+        "目录页将自动生成连贯导读旁白。",
+        "正文较密，建议使用预览模式确认字幕和版式。"
+      ]
+    },
+    {
+      "slide_number": 6,
+      "title": "方向判断方法",
+      "page_type": "comparison",
+      "text_units": 153.2,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 7,
+      "title": "影响因素分析",
+      "page_type": "section",
+      "text_units": 148.8,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 8,
+      "title": "摩擦力的计算与应用",
+      "page_type": "section",
+      "text_units": 9.0,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 9,
+      "title": "计算公式介绍",
+      "page_type": "data",
+      "text_units": 153.5,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 10,
+      "title": "增大有益摩擦",
+      "page_type": "section",
+      "text_units": 153.1,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 11,
+      "title": "减小有害摩擦",
+      "page_type": "section",
+      "text_units": 150.7,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 12,
+      "title": "摩擦力在生活",
+      "page_type": "section",
+      "text_units": 154.8,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 13,
+      "title": "摩擦力的实验探究",
+      "page_type": "section",
+      "text_units": 8.0,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [
+        "image_heavy"
+      ],
+      "severity": "low",
+      "suggestions": [
+        "该页可能依赖图片内容，建议抽检画面。"
+      ]
+    },
+    {
+      "slide_number": 14,
+      "title": "实验器材准备",
+      "page_type": "comparison",
+      "text_units": 155.8,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 15,
+      "title": "实验步骤设计",
+      "page_type": "process",
+      "text_units": 156.2,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 16,
+      "title": "实验数据记录",
+      "page_type": "comparison",
+      "text_units": 155.4,
+      "image_count": 1,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 17,
+      "title": "实验结论得出",
+      "page_type": "comparison",
+      "text_units": 164.2,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    },
+    {
+      "slide_number": 18,
+      "title": "本节小结",
+      "page_type": "section",
+      "text_units": 96.1,
+      "image_count": 0,
+      "catalog_items": [],
+      "risks": [],
+      "severity": "low",
+      "suggestions": []
+    }
+  ]
+}

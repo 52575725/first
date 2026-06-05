@@ -165,11 +165,11 @@ yarn.lock
 TODO.md
 PERSONAL_NOTES.md
 
-# Projects directory - Work-in-progress projects (not version controlled)
-# Completed projects should be moved to examples/
-# Use cloud sync (iCloud/Dropbox) for backup and multi-device access
+# Projects directory
+# Ignore ad-hoc local projects by default, but keep the public sample project tracked.
 projects/*
-!projects/README.md
+!projects/friction_micro_course_demo/
+!projects/friction_micro_course_demo/**
 
 # API runtime jobs
 api_jobs/

@@ -23,8 +23,14 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+for stream_name in ("stdout", "stderr"):
+    stream = getattr(sys, stream_name, None)
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 # ─────────────────────────────────────────────────────────────
 # Format registry
@@ -400,7 +406,83 @@ def _check_pandoc() -> bool:
     return shutil.which("pandoc") is not None
 
 
+def _find_libreoffice() -> str | None:
+    candidates = [
+        shutil.which("soffice.com"),
+        shutil.which("soffice"),
+        shutil.which("libreoffice"),
+        r"C:\Program Files\LibreOffice\program\soffice.com",
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.com",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return None
+
+
+def _convert_doc_via_libreoffice(input_file: Path, out_file: Path) -> str:
+    soffice = _find_libreoffice()
+    if not soffice:
+        print("[ERROR] Format '.doc' requires pandoc or LibreOffice.")
+        print("   Windows LibreOffice: https://www.libreoffice.org/download/download/")
+        print("   Pandoc: https://pandoc.org/installing.html")
+        return ""
+
+    with tempfile.TemporaryDirectory(prefix="ppt_master_doc_", dir=str(out_file.parent)) as tmp:
+        tmp_dir = Path(tmp)
+        profile_dir = tmp_dir / "lo_profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        work_input = tmp_dir / "source.doc"
+        shutil.copy2(input_file, work_input)
+        cmd = [
+            soffice,
+            "--headless",
+            "--invisible",
+            "--nodefault",
+            "--norestore",
+            "--nolockcheck",
+            "--nofirststartwizard",
+            f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
+            "--convert-to",
+            "docx",
+            "--outdir",
+            str(tmp_dir),
+            str(work_input.resolve()),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=240,
+            )
+        except subprocess.TimeoutExpired:
+            print("[ERROR] LibreOffice .doc conversion timed out after 240 seconds")
+            return ""
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            print(f"[ERROR] LibreOffice .doc conversion failed:\n{detail}")
+            return ""
+
+        converted_files = sorted(tmp_dir.glob("*.docx"))
+        if not converted_files:
+            detail = (result.stderr or result.stdout or "").strip()
+            print(f"[ERROR] LibreOffice did not produce a .docx file:\n{detail}")
+            return ""
+
+        print(f"[INFO] Converted legacy .doc through LibreOffice: {converted_files[0].name}")
+        return _convert_docx(converted_files[0], out_file)
+
+
 def _convert_with_pandoc(input_file: Path, out_file: Path, suffix: str) -> str:
+    if suffix == ".doc" and not _check_pandoc():
+        print(f"[INFO] Pandoc not found; using LibreOffice fallback for: {input_file.name}")
+        return _convert_doc_via_libreoffice(input_file, out_file)
+
     if not _check_pandoc():
         print(f"[ERROR] Format '{suffix}' requires pandoc. Install it:")
         print("   macOS:   brew install pandoc")

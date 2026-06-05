@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FastAPI wrapper for the unified PPT Master video pipeline."""
+"""FastAPI wrapper for the unified micro-course video pipeline."""
 
 from __future__ import annotations
 
@@ -63,8 +63,8 @@ ROLE_STAGE_MAP = {
 }
 
 app = FastAPI(
-    title="PPT Master Micro-course API",
-    description="Upload PPT/course material, run the unified video pipeline, and download outputs.",
+    title="Micro-course Video API",
+    description="Upload PPT or teaching material, run the micro-course video pipeline, and download outputs.",
     version="0.1.0",
 )
 app.add_middleware(
@@ -267,7 +267,8 @@ async def create_job(
     style: str = Form(default="micro-course"),
     execute_assets: bool = Form(default=False),
     skip_assets: bool = Form(default=False),
-    asset_limit: int | None = Form(default=None),
+    asset_limit: int | None = Form(default=8),
+    asset_timeout: int = Form(default=300),
     voice: str = Form(default="zh-CN-XiaoxiaoNeural"),
     rate: str = Form(default="-6%"),
     pitch: str = Form(default="-3Hz"),
@@ -330,6 +331,7 @@ async def create_job(
         execute_assets=execute_assets,
         skip_assets=skip_assets,
         asset_limit=asset_limit,
+        asset_timeout=asset_timeout,
         preview_slides=preview,
         force_render=force_render,
         force_audio=force_audio,

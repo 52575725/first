@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Unified orchestration layer for PPT Master micro-course video generation."""
+"""Unified orchestration layer for micro-course video generation."""
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -41,7 +42,8 @@ class PipelineConfig:
     style: str = "micro-course"
     execute_assets: bool = False
     skip_assets: bool = False
-    asset_limit: int | None = None
+    asset_limit: int | None = 8
+    asset_timeout: int = 300
     preview_slides: int | None = None
     force_render: bool = False
     force_audio: bool = False
@@ -200,6 +202,8 @@ class UnifiedVideoPipeline:
             str(self.config.tts_rate),
             "--audio-timeout",
             str(self.config.audio_timeout),
+            "--asset-timeout",
+            str(self.config.asset_timeout),
             "--render-timeout",
             str(self.config.render_timeout),
             "--qa-frames",
@@ -258,12 +262,17 @@ class UnifiedVideoPipeline:
 
     def _run_command(self, command: list[str], *, cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
         started_at = now_iso()
+        env = os.environ.copy()
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         result = subprocess.run(
             command,
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             errors="replace",
+            env=env,
             timeout=timeout,
         )
         self.run_log.append(
@@ -288,6 +297,7 @@ class UnifiedVideoPipeline:
             "execute_assets": self.config.execute_assets,
             "skip_assets": self.config.skip_assets,
             "asset_limit": self.config.asset_limit,
+            "asset_timeout": self.config.asset_timeout,
             "voice": self.config.tts_voice,
             "rate": self.config.tts_edge_rate,
             "pitch": self.config.tts_edge_pitch,
@@ -328,6 +338,8 @@ class UnifiedVideoPipeline:
                 "style": self.config.style,
                 "execute_assets": self.config.execute_assets,
                 "skip_assets": self.config.skip_assets,
+                "asset_limit": self.config.asset_limit,
+                "asset_timeout": self.config.asset_timeout,
                 "preview_slides": self.config.preview_slides,
                 "force_render": self.config.force_render,
                 "tts_provider": self.config.tts_provider,

@@ -33,7 +33,7 @@ from typing import Any, Optional
 # Project-wide constants
 # ---------------------------------------------------------------------------
 
-USER_AGENT = "PPTMaster/1.0 (https://github.com/hugohe3/ppt-master)"
+USER_AGENT = "SmartMicrocourseVideoGenerator/1.0"
 
 
 # ---------------------------------------------------------------------------
